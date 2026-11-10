@@ -16,7 +16,7 @@
  * WISE 0855-0714 or Epsilon Indi B; those sightlines are explicitly suppressed.
  */
 
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Input, Select } from '../components/ui';
 import { useTelemetryStore } from '../store/useTelemetryStore';
 import { useSpectraUrlState } from '../hooks/useSpectraUrlState';
@@ -69,6 +69,23 @@ export interface IceSolution {
   bands: IceColumnResult[];
   ratioPercent: number | null;
   brownDwarfNotice: string | null;
+}
+
+export interface AperturePhotometry {
+  apertureRadiusPx: number;
+  annulusInnerPx: number;
+  annulusOuterPx: number;
+  psfFwhmPx: number;
+  skyLevel: number;
+  sourceFraction: number;
+  backgroundSubtractedFlux: number;
+  snr: number;
+}
+
+export interface SpectrumSource {
+  wavelengthsUm: number[];
+  flux: number[];
+  badge: string;
 }
 
 export const ICE_BANDS: IceBand[] = [
@@ -165,7 +182,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     snr: 41.8,
     teffK: 4500,
     avMag: 14.2,
-    badge: '[SPLICES Catalog (Seeded)]',
+    badge: '[Synthetic Injection Mode]',
     columns: SPLICES_COLUMNS[0],
   },
   {
@@ -178,7 +195,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     snr: 37.4,
     teffK: 3900,
     avMag: 18.6,
-    badge: '[SPLICES Catalog (Seeded)]',
+    badge: '[Synthetic Injection Mode]',
     columns: SPLICES_COLUMNS[1],
   },
   {
@@ -191,7 +208,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     snr: 52.1,
     teffK: 5200,
     avMag: 9.4,
-    badge: '[SPLICES Catalog (Seeded)]',
+    badge: '[Synthetic Injection Mode]',
     columns: SPLICES_COLUMNS[2],
   },
   {
@@ -204,7 +221,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     snr: 33.9,
     teffK: 6100,
     avMag: 11.8,
-    badge: '[SPLICES Catalog (Seeded)]',
+    badge: '[Synthetic Injection Mode]',
     columns: SPLICES_COLUMNS[3],
   },
   {
@@ -217,7 +234,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     snr: 45.6,
     teffK: 4700,
     avMag: 21.3,
-    badge: '[SPLICES Catalog (Seeded)]',
+    badge: '[Synthetic Injection Mode]',
     columns: SPLICES_COLUMNS[4],
   },
   {
@@ -230,7 +247,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     snr: 29.8,
     teffK: 7200,
     avMag: 16.1,
-    badge: '[SPLICES Catalog (Seeded)]',
+    badge: '[Synthetic Injection Mode]',
     columns: SPLICES_COLUMNS[5],
   },
 ];
@@ -431,13 +448,90 @@ export function isBrownDwarfTarget(name: string | null, ra: number, dec: number)
   );
 }
 
+function hash01(seed: number): number {
+  const value = Math.sin(seed) * 43758.5453123;
+  return value - Math.floor(value);
+}
+
+export function targetBaseFlux(target: SplicesTarget): number {
+  return 0.02 + 0.000008 * target.teffK;
+}
+
+/**
+ * Deterministic HDU-5-style PSF aperture photometry proxy.
+ *
+ * Synthetic mode still evaluates the exact pencil-beam algorithm: a normalized Gaussian
+ * point-spread function is rendered onto a pixel grid, the source is summed inside the
+ * circular aperture, and the local sky is estimated in the annulus and subtracted by
+ * aperture area. The recovered source fraction therefore responds to both controls.
+ */
+export function performAperturePhotometry(
+  apertureRadiusPx: number,
+  annulusInnerPx: number,
+  annulusOuterPx: number,
+  target: SplicesTarget
+): AperturePhotometry {
+  const safeAperture = Math.max(0.5, Math.min(4, apertureRadiusPx));
+  const safeInner = Math.max(safeAperture + 0.2, Math.min(6, annulusInnerPx));
+  const safeOuter = Math.max(safeInner + 0.5, Math.min(10, annulusOuterPx));
+  const sigmaPx = 0.85;
+  const psfFwhmPx = 2.3548 * sigmaPx;
+  const sourceAmplitude = 100;
+  const half = Math.max(9, Math.ceil(safeOuter) + 2);
+
+  const skyLevel = 0.004 + 0.0008 * target.avMag + 0.000005 * target.teffK;
+  let apertureSum = 0;
+  let apertureArea = 0;
+  let annulusSum = 0;
+  let annulusArea = 0;
+  let apertureNoiseVariance = 0;
+
+  for (let iy = -half; iy <= half; iy++) {
+    for (let ix = -half; ix <= half; ix++) {
+      const radius = Math.hypot(ix, iy);
+      const psf =
+        (sourceAmplitude * Math.exp(-0.5 * (radius / sigmaPx) ** 2)) /
+        (2 * Math.PI * sigmaPx ** 2);
+      const noise = (hash01(ix * 13.17 + iy * 7.31 + target.ra * 0.37) - 0.5) * 0.004;
+      const pixel = skyLevel + psf + noise;
+      if (radius <= safeAperture) {
+        apertureSum += pixel;
+        apertureArea += 1;
+        apertureNoiseVariance += Math.abs(pixel) + noise ** 2;
+      }
+      if (radius >= safeInner && radius <= safeOuter) {
+        annulusSum += pixel;
+        annulusArea += 1;
+      }
+    }
+  }
+
+  const skyPerPixel = annulusArea > 0 ? annulusSum / annulusArea : skyLevel;
+  const backgroundSubtractedFlux = Math.max(0, apertureSum - skyPerPixel * apertureArea);
+  const sourceFraction = Math.max(0.02, Math.min(1.2, backgroundSubtractedFlux / sourceAmplitude));
+  const noiseFloor = Math.sqrt(Math.max(1e-9, apertureNoiseVariance + skyPerPixel * apertureArea));
+  const snr = backgroundSubtractedFlux / noiseFloor;
+
+  return {
+    apertureRadiusPx: safeAperture,
+    annulusInnerPx: safeInner,
+    annulusOuterPx: safeOuter,
+    psfFwhmPx,
+    skyLevel: skyPerPixel,
+    sourceFraction,
+    backgroundSubtractedFlux,
+    snr,
+  };
+}
+
 export function generateSplicesSpectrum(
   target: SplicesTarget,
-  nPoints = 1401
+  nPoints = 1401,
+  sourceFraction = 1
 ): { wavelengthsUm: number[]; flux: number[] } {
   const wavelengthsUm: number[] = [];
   const flux: number[] = [];
-  const baseFlux = 0.02 + 0.000008 * target.teffK;
+  const baseFlux = targetBaseFlux(target);
   for (let index = 0; index < nPoints; index++) {
     const wave = 0.75 + (index / (nPoints - 1)) * 4.25;
     const shifted = wave - 2.9;
@@ -457,7 +551,7 @@ export function generateSplicesSpectrum(
       });
     }
     wavelengthsUm.push(wave);
-    flux.push(Math.max(1e-12, continuum * Math.exp(-tauNu)));
+    flux.push(Math.max(1e-12, sourceFraction * continuum * Math.exp(-tauNu)));
   }
   return { wavelengthsUm, flux };
 }
@@ -536,7 +630,10 @@ export const MolecularIceStudio: React.FC = () => {
   const [apertureRadius, setApertureRadius] = useState(1.5);
   const [annulusInner, setAnnulusInner] = useState(3.0);
   const [annulusOuter, setAnnulusOuter] = useState(5.0);
-  const [mode, setMode] = useState<'raw' | 'tau'>('tau');
+  const [mode, setMode] = useState<'raw' | 'transmission' | 'tau'>('tau');
+  const [sourceMode, setSourceMode] = useState<'synthetic' | 'live'>('synthetic');
+  const [liveSpectrum, setLiveSpectrum] = useState<SpectrumSource | null>(null);
+  const [liveStatus, setLiveStatus] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [activeBands, setActiveBands] = useState<IceKey[]>(['h2o', 'co2', 'co2_13', 'co', 'ch3oh']);
   const [ledgerState, setLedgerState] = useState<'idle' | 'submitting' | 'logged' | 'offline'>('idle');
   const [ledgerNote, setLedgerNote] = useState<string>('');
@@ -546,11 +643,77 @@ export const MolecularIceStudio: React.FC = () => {
     [selectedId]
   );
 
-  const spectrum = useMemo(() => generateSplicesSpectrum(selectedTarget), [selectedTarget]);
-  const solution = useMemo(
-    () => analyzeIceProfile(selectedTarget, spectrum.wavelengthsUm, spectrum.flux),
-    [selectedTarget, spectrum]
+  // Real pencil-beam aperture photometry: the controls below actually change the
+  // recovered source fraction (PSF inside the aperture minus annulus sky by area).
+  const photometry = useMemo(
+    () => performAperturePhotometry(apertureRadius, annulusInner, annulusOuter, selectedTarget),
+    [apertureRadius, annulusInner, annulusOuter, selectedTarget]
   );
+  const syntheticSpectrum = useMemo(
+    () => generateSplicesSpectrum(selectedTarget, 1401, photometry.sourceFraction),
+    [photometry.sourceFraction, selectedTarget]
+  );
+
+  // Optional live HDU 6 spectrum. Offline demo mode falls back to the synthetic template.
+  useEffect(() => {
+    if (sourceMode !== 'live') return;
+    let cancelled = false;
+    setLiveStatus('loading');
+    setLiveSpectrum(null);
+    fetch(`/api/spectrum?ra=${selectedTarget.ra}&dec=${selectedTarget.dec}&normalize=false`)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((payload: { wavelengths_um?: number[]; flux_jy?: number[]; provenance?: { source_badge?: string } }) => {
+        if (cancelled) return;
+        if (!Array.isArray(payload.wavelengths_um) || !Array.isArray(payload.flux_jy)) {
+          throw new Error('Malformed spectrum payload');
+        }
+        setLiveSpectrum({
+          wavelengthsUm: payload.wavelengths_um,
+          flux: payload.flux_jy,
+          badge: payload.provenance?.source_badge || '[IRSA Live (spherex_qr2)]',
+        });
+        setLiveStatus('ready');
+      })
+      .catch(() => {
+        if (!cancelled) setLiveStatus('error');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTarget, sourceMode]);
+
+  const activeSpectrum: SpectrumSource = useMemo(() => {
+    if (sourceMode === 'live' && liveSpectrum) return liveSpectrum;
+    return {
+      wavelengthsUm: syntheticSpectrum.wavelengthsUm,
+      flux: syntheticSpectrum.flux,
+      badge: selectedTarget.badge,
+    };
+  }, [liveSpectrum, selectedTarget.badge, sourceMode, syntheticSpectrum]);
+
+  const solution = useMemo(
+    () => analyzeIceProfile(selectedTarget, activeSpectrum.wavelengthsUm, activeSpectrum.flux),
+    [activeSpectrum, selectedTarget]
+  );
+
+  // A sky-annulus selection has no background-star continuum; never report N_ice for it.
+  const effectiveSolution = useMemo(() => {
+    if (selectedSource !== 'sky') return solution;
+    return {
+      ...solution,
+      bands: solution.bands.map((band) => ({
+        ...band,
+        integratedTauCm1: null,
+        columnDensity: null,
+        suppressed: true,
+      })),
+      ratioPercent: null,
+    };
+  }, [selectedSource, solution]);
+  const skySelected = selectedSource === 'sky';
 
   // Machine-checkable validation against the analytically injected SPLICES profile.
   // Acceptance target: recovered N(H2O) and N(CO2) within <2% of the injection.
@@ -571,9 +734,13 @@ export const MolecularIceStudio: React.FC = () => {
     );
   };
 
-  const selectedBands = solution.bands.filter((band) => activeBands.includes(band.key));
+  const selectedBands = effectiveSolution.bands.filter((band) => activeBands.includes(band.key));
   const maxTau = Math.max(0.4, ...solution.tau.map((value) => Math.max(0, value)));
   const maxFlux = Math.max(1e-6, ...solution.flux.map((value) => Math.max(0, value)));
+  const transmission = useMemo(
+    () => solution.tau.map((value) => Math.exp(-Math.max(0, value))),
+    [solution.tau]
+  );
 
   const plotPoints = (values: number[], maximum: number): string => {
     return solution.wavelengthsUm
@@ -600,14 +767,17 @@ export const MolecularIceStudio: React.FC = () => {
       observerKey = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
       localStorage.setItem('spx_observer_key', observerKey);
     }
-    const nH2O = solution.bands.find((band) => band.key === 'h2o');
-    const nCO2 = solution.bands.find((band) => band.key === 'co2');
-    const body = solution.brownDwarfNotice
+    const nH2O = effectiveSolution.bands.find((band) => band.key === 'h2o');
+    const nCO2 = effectiveSolution.bands.find((band) => band.key === 'co2');
+    const body = effectiveSolution.brownDwarfNotice
       ? `${PHOTOSPHERIC_CH4_NOTICE} Sightline: ${selectedTarget.name}. No solid-ice column density is reported.`
       : `SPLICES point-source ice ledger: N(H2O) = ${formatColumnDensity(nH2O?.columnDensity ?? null)} cm^-2, ` +
         `N(CO2) = ${formatColumnDensity(nCO2?.columnDensity ?? null)} cm^-2, ` +
-        `CO2/H2O = ${solution.ratioPercent?.toFixed(2) ?? '—'}%. ` +
-        `Aperture ${apertureRadius.toFixed(1)} px; sky annulus ${annulusInner.toFixed(1)}-${annulusOuter.toFixed(1)} px.`;
+        `CO2/H2O = ${effectiveSolution.ratioPercent?.toFixed(2) ?? '—'}%. ` +
+        `Aperture ${photometry.apertureRadiusPx.toFixed(1)} px; sky annulus ` +
+        `${photometry.annulusInnerPx.toFixed(1)}-${photometry.annulusOuterPx.toFixed(1)} px; ` +
+        `PSF FWHM ${photometry.psfFwhmPx.toFixed(2)} px; extracted source fraction ` +
+        `${(100 * photometry.sourceFraction).toFixed(1)}%.`;
     try {
       const response = await fetch('/api/forum/threads', {
         method: 'POST',
@@ -625,10 +795,10 @@ export const MolecularIceStudio: React.FC = () => {
           renderMode: 'coadd',
           targetName: selectedTarget.name,
           classification: 'interstellar_ice',
-          confidencePct: solution.brownDwarfNotice ? 0 : 88,
-          classificationVote: solution.brownDwarfNotice ? null : 'ice_source',
+          confidencePct: effectiveSolution.brownDwarfNotice ? 0 : 88,
+          classificationVote: effectiveSolution.brownDwarfNotice ? null : 'ice_source',
           channel: 'ices',
-          hashtags: solution.brownDwarfNotice ? [] : ['#ice_source'],
+          hashtags: effectiveSolution.brownDwarfNotice ? [] : ['#ice_source'],
         }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -638,13 +808,7 @@ export const MolecularIceStudio: React.FC = () => {
       setLedgerState('offline');
       setLedgerNote('Ledger entry retained locally (backend forum unavailable in offline demo mode).');
     }
-  }, [
-    annulusInner,
-    annulusOuter,
-    apertureRadius,
-    selectedTarget,
-    solution,
-  ]);
+  }, [effectiveSolution, photometry, selectedTarget]);
 
   return (
     <div className="flex h-full w-full overflow-hidden bg-background font-sans text-xs text-foreground">
@@ -659,8 +823,8 @@ export const MolecularIceStudio: React.FC = () => {
               Point-source pencil beam · ice mapping behind molecular clouds
             </p>
           </div>
-          <Badge variant="sky" className="font-mono text-[10px]">
-            {selectedTarget.badge}
+          <Badge variant={activeSpectrum.badge.includes('Synthetic') ? 'amber' : 'sky'} className="font-mono text-[10px]">
+            {activeSpectrum.badge}
           </Badge>
         </header>
 
@@ -692,6 +856,29 @@ export const MolecularIceStudio: React.FC = () => {
                 </option>
               ))}
             </optgroup>
+          </Select>
+        </div>
+
+        <div className="flex items-center justify-between gap-2 rounded-sm border border-border bg-card px-3 py-2">
+          <div>
+            <div className="text-[11px] font-medium text-foreground">Spectrum source</div>
+            <div className="text-[10px] text-muted-foreground">
+              {sourceMode === 'live'
+                ? liveStatus === 'loading'
+                  ? 'Fetching HDU 6 WCS-WAVE spectrum…'
+                  : liveStatus === 'ready'
+                    ? 'Live IRSA HDU 6 spectrum loaded'
+                    : 'Live fetch unavailable — synthetic fallback active'
+                : 'Deterministic SPLICES synthetic template'}
+            </div>
+          </div>
+          <Select
+            value={sourceMode}
+            onChange={(event) => setSourceMode(event.target.value as 'synthetic' | 'live')}
+            sizeVariant="xs"
+          >
+            <option value="synthetic">Synthetic SPLICES</option>
+            <option value="live">Live /api/spectrum</option>
           </Select>
         </div>
 
@@ -806,10 +993,15 @@ export const MolecularIceStudio: React.FC = () => {
             <dd className="text-right text-foreground">Av ~ {selectedTarget.avMag.toFixed(1)} mag</dd>
             <dt className="text-muted-foreground">Continuum windows</dt>
             <dd className="text-right text-foreground">2.1–2.4, 3.7–3.9 µm</dd>
+            <dt className="text-muted-foreground">PSF FWHM</dt>
+            <dd className="text-right text-foreground">{photometry.psfFwhmPx.toFixed(2)} px</dd>
             <dt className="text-muted-foreground">Source badge</dt>
             <dd className="flex justify-end">
-              <Badge variant="amber" className="font-mono text-[9px]">
-                {selectedTarget.badge}
+              <Badge
+                variant={activeSpectrum.badge.includes('Synthetic') ? 'amber' : 'sky'}
+                className="font-mono text-[9px]"
+              >
+                {activeSpectrum.badge}
               </Badge>
             </dd>
           </dl>
@@ -824,6 +1016,16 @@ export const MolecularIceStudio: React.FC = () => {
           </div>
         )}
 
+        {skySelected && (
+          <div className="rounded-sm border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-200">
+            <div className="mb-1 font-semibold uppercase tracking-wide text-amber-300">
+              Sky annulus selected
+            </div>
+            The local sky annulus contains no background-star continuum. Solid-ice column densities and
+            the CO2/H2O ratio are suppressed until “Primary background star” is selected.
+          </div>
+        )}
+
         <div className="mt-auto rounded-sm border border-border bg-card p-3">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -834,8 +1036,10 @@ export const MolecularIceStudio: React.FC = () => {
             </Badge>
           </div>
           <p className="mt-1.5 font-mono text-[10px] leading-relaxed text-muted-foreground">
-            Aperture {apertureRadius.toFixed(1)} px · sky annulus {annulusInner.toFixed(1)}–{annulusOuter.toFixed(1)} px ·
-            local background subtracted before τ(λ) transformation.
+            Aperture {photometry.apertureRadiusPx.toFixed(1)} px · sky annulus{' '}
+            {photometry.annulusInnerPx.toFixed(1)}–{photometry.annulusOuterPx.toFixed(1)} px · sky{' '}
+            {photometry.skyLevel.toExponential(2)} MJy/sr · extracted source fraction{' '}
+            {(100 * photometry.sourceFraction).toFixed(1)}% · SNR {photometry.snr.toFixed(1)}
           </p>
         </div>
       </section>
@@ -862,6 +1066,17 @@ export const MolecularIceStudio: React.FC = () => {
                 }`}
               >
                 Raw MJy/sr
+              </button>
+              <button
+                type="button"
+                onClick={() => setMode('transmission')}
+                className={`px-2.5 py-1 text-[11px] transition-colors ${
+                  mode === 'transmission'
+                    ? 'bg-primary/20 text-primary'
+                    : 'bg-background text-muted-foreground'
+                }`}
+              >
+                Transmission F/F_cont
               </button>
               <button
                 type="button"
@@ -904,7 +1119,11 @@ export const MolecularIceStudio: React.FC = () => {
                 <g key={fraction}>
                   <line x1="54" y1={y} x2="896" y2={y} stroke="#262626" strokeWidth="1" />
                   <text x="48" y={y + 3} textAnchor="end" fill="#A3A3A3" fontSize="10" fontFamily="monospace">
-                    {mode === 'tau' ? (fraction * maxTau).toFixed(2) : (fraction * maxFlux).toFixed(3)}
+                    {mode === 'tau'
+                      ? (fraction * maxTau).toFixed(2)
+                      : mode === 'transmission'
+                        ? fraction.toFixed(1)
+                        : (fraction * maxFlux).toFixed(3)}
                   </text>
                 </g>
               );
@@ -935,6 +1154,8 @@ export const MolecularIceStudio: React.FC = () => {
             })}
             {mode === 'tau' ? (
               <polyline fill="none" stroke="#38bdf8" strokeWidth="1.8" points={plotPoints(solution.tau, maxTau)} />
+            ) : mode === 'transmission' ? (
+              <polyline fill="none" stroke="#34d399" strokeWidth="1.8" points={plotPoints(transmission, 1.0)} />
             ) : (
               <>
                 <polyline fill="none" stroke="#f59e0b" strokeWidth="1.2" strokeDasharray="4,3" points={plotPoints(solution.continuum, maxFlux)} />
@@ -949,16 +1170,25 @@ export const MolecularIceStudio: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2">
           <Badge variant="muted" className="font-mono">
-            Aperture {apertureRadius.toFixed(1)} px
+            Aperture {photometry.apertureRadiusPx.toFixed(1)} px
           </Badge>
           <Badge variant="muted" className="font-mono">
-            Sky {annulusInner.toFixed(1)}–{annulusOuter.toFixed(1)} px
+            Sky {photometry.annulusInnerPx.toFixed(1)}–{photometry.annulusOuterPx.toFixed(1)} px
+          </Badge>
+          <Badge variant="muted" className="font-mono">
+            PSF FWHM {photometry.psfFwhmPx.toFixed(2)} px
+          </Badge>
+          <Badge variant="muted" className="font-mono">
+            Source {Math.round(100 * photometry.sourceFraction)}%
           </Badge>
           <Badge variant="sky" className="font-mono">
             τ mode: 4th-order Chebyshev
           </Badge>
-          <Badge variant="emerald" className="font-mono">
-            Synthetic SPLICES template
+          <Badge
+            variant={activeSpectrum.badge.includes('Synthetic') ? 'amber' : 'sky'}
+            className="font-mono"
+          >
+            {activeSpectrum.badge}
           </Badge>
           {validation && validation.h2o !== null && (
             <Badge
@@ -976,8 +1206,11 @@ export const MolecularIceStudio: React.FC = () => {
             <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
               Column density quantifications
             </h3>
-            <Badge variant={solution.brownDwarfNotice ? 'amber' : 'emerald'} className="font-mono">
-              CO2 / H2O = {solution.ratioPercent === null ? 'suppressed' : `${solution.ratioPercent.toFixed(2)}%`}
+            <Badge variant={effectiveSolution.ratioPercent === null ? 'amber' : 'emerald'} className="font-mono">
+              CO2 / H2O ={' '}
+              {effectiveSolution.ratioPercent === null
+                ? 'suppressed'
+                : `${effectiveSolution.ratioPercent.toFixed(2)}%`}
             </Badge>
           </div>
           <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
@@ -992,7 +1225,7 @@ export const MolecularIceStudio: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
-              {solution.bands
+              {effectiveSolution.bands
                 .filter((band) => activeBands.includes(band.key))
                 .map((band) => {
                   const definition = ICE_BANDS.find((item) => item.key === band.key);
@@ -1020,31 +1253,34 @@ export const MolecularIceStudio: React.FC = () => {
           </div>
         </div>
 
-        {solution.brownDwarfNotice ? (
+        {effectiveSolution.brownDwarfNotice || skySelected ? (
           <div className="rounded-sm border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] text-amber-200">
             <div className="font-semibold text-amber-300">Solid-ice column densities suppressed</div>
-            <p className="mt-1 leading-relaxed">{solution.brownDwarfNotice}</p>
+            <p className="mt-1 leading-relaxed">
+              {effectiveSolution.brownDwarfNotice ||
+                'Sky-annulus selection has no background-star continuum; select the primary background star to compute N_ice.'}
+            </p>
           </div>
         ) : (
           <div className="grid grid-cols-3 gap-2">
             <div className="rounded-sm border border-border bg-card p-3">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">N(H2O)</div>
               <div className="mt-1 font-mono text-sm text-sky-300">
-                {formatColumnDensity(solution.bands.find((band) => band.key === 'h2o')?.columnDensity ?? null)}
+                {formatColumnDensity(effectiveSolution.bands.find((band) => band.key === 'h2o')?.columnDensity ?? null)}
               </div>
               <div className="mt-0.5 text-[10px] text-muted-foreground">molecules cm⁻²</div>
             </div>
             <div className="rounded-sm border border-border bg-card p-3">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">N(CO2)</div>
               <div className="mt-1 font-mono text-sm text-amber-300">
-                {formatColumnDensity(solution.bands.find((band) => band.key === 'co2')?.columnDensity ?? null)}
+                {formatColumnDensity(effectiveSolution.bands.find((band) => band.key === 'co2')?.columnDensity ?? null)}
               </div>
               <div className="mt-0.5 text-[10px] text-muted-foreground">molecules cm⁻²</div>
             </div>
             <div className="rounded-sm border border-border bg-card p-3">
               <div className="text-[10px] uppercase tracking-wide text-muted-foreground">CO2 / H2O</div>
               <div className="mt-1 font-mono text-sm text-emerald-300">
-                {solution.ratioPercent === null ? '—' : `${solution.ratioPercent.toFixed(2)}%`}
+                {effectiveSolution.ratioPercent === null ? '—' : `${effectiveSolution.ratioPercent.toFixed(2)}%`}
               </div>
               <div className="mt-0.5 text-[10px] text-muted-foreground">ice abundance ratio</div>
             </div>
@@ -1063,7 +1299,7 @@ export const MolecularIceStudio: React.FC = () => {
           <Button
             onClick={handleSubmitLedger}
             disabled={ledgerState === 'submitting' || selectedSource === 'sky'}
-            variant={solution.brownDwarfNotice ? 'outline' : 'default'}
+            variant={effectiveSolution.brownDwarfNotice ? 'outline' : 'default'}
           >
             {ledgerState === 'submitting' ? 'Submitting…' : ledgerState === 'logged' ? 'Ledger entry logged' : 'Submit ledger entry'}
           </Button>

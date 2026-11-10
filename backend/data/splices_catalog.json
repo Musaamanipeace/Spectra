@@ -12,7 +12,7 @@
       "snr": 41.8,
       "teff_k": 4500,
       "av_mag": 14.2,
-      "badge": "[SPLICES Catalog (Seeded)]",
+      "badge": "[Synthetic Injection Mode]",
       "columns_cm2": {
         "h2o": 2.45e18,
         "co2": 4.12e17,
@@ -31,7 +31,7 @@
       "snr": 37.4,
       "teff_k": 3900,
       "av_mag": 18.6,
-      "badge": "[SPLICES Catalog (Seeded)]",
+      "badge": "[Synthetic Injection Mode]",
       "columns_cm2": {
         "h2o": 3.10e18,
         "co2": 5.80e17,
@@ -50,7 +50,7 @@
       "snr": 52.1,
       "teff_k": 5200,
       "av_mag": 9.4,
-      "badge": "[SPLICES Catalog (Seeded)]",
+      "badge": "[Synthetic Injection Mode]",
       "columns_cm2": {
         "h2o": 1.62e18,
         "co2": 2.95e17,
@@ -69,7 +69,7 @@
       "snr": 33.9,
       "teff_k": 6100,
       "av_mag": 11.8,
-      "badge": "[SPLICES Catalog (Seeded)]",
+      "badge": "[Synthetic Injection Mode]",
       "columns_cm2": {
         "h2o": 1.10e18,
         "co2": 1.88e17,
@@ -88,7 +88,7 @@
       "snr": 45.6,
       "teff_k": 4700,
       "av_mag": 21.3,
-      "badge": "[SPLICES Catalog (Seeded)]",
+      "badge": "[Synthetic Injection Mode]",
       "columns_cm2": {
         "h2o": 4.05e18,
         "co2": 7.20e17,
@@ -107,7 +107,7 @@
       "snr": 29.8,
       "teff_k": 7200,
       "av_mag": 16.1,
-      "badge": "[SPLICES Catalog (Seeded)]",
+      "badge": "[Synthetic Injection Mode]",
       "columns_cm2": {
         "h2o": 2.90e18,
         "co2": 4.90e17,
