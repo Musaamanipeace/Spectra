@@ -177,7 +177,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     name: 'SPLICES-J181410-175200',
     ra: 273.54167,
     dec: -17.86667,
-    catalog: 'SPLICES Ice Source Candidate (SNR > 30)',
+    catalog: 'SPLICES Ice Source Candidate (synthetic demo seed)',
     environment: 'Embedded YSO / dense molecular cloud',
     snr: 41.8,
     teffK: 4500,
@@ -190,7 +190,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     name: 'SPLICES-J162813-242734',
     ra: 247.05417,
     dec: -24.45944,
-    catalog: 'SPLICES Ice Source Candidate (SNR > 30)',
+    catalog: 'SPLICES Ice Source Candidate (synthetic demo seed)',
     environment: 'Class 0 protostar / outflow cavity',
     snr: 37.4,
     teffK: 3900,
@@ -203,7 +203,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     name: 'SPLICES-J053120+221748',
     ra: 82.83333,
     dec: 22.29667,
-    catalog: 'SPLICES Ice Source Candidate (SNR > 30)',
+    catalog: 'SPLICES Ice Source Candidate (synthetic demo seed)',
     environment: 'Young stellar object / Taurus cloud',
     snr: 52.1,
     teffK: 5200,
@@ -216,7 +216,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     name: 'SPLICES-J214131+580438',
     ra: 325.37917,
     dec: 58.07722,
-    catalog: 'SPLICES Ice Source Candidate (SNR > 30)',
+    catalog: 'SPLICES Ice Source Candidate (synthetic demo seed)',
     environment: 'Isolated dense core / Cepheus flare',
     snr: 33.9,
     teffK: 6100,
@@ -229,7 +229,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     name: 'SPLICES-J183029-023811',
     ra: 277.62083,
     dec: -2.63639,
-    catalog: 'SPLICES Ice Source Candidate (SNR > 30)',
+    catalog: 'SPLICES Ice Source Candidate (synthetic demo seed)',
     environment: 'Infrared dark cloud / high extinction sightline',
     snr: 45.6,
     teffK: 4700,
@@ -242,7 +242,7 @@ export const SPLICES_BACKGROUND_STARS: SplicesTarget[] = [
     name: 'SPLICES-J065754-044520',
     ra: 104.475,
     dec: -4.75556,
-    catalog: 'SPLICES Ice Source Candidate (SNR > 30)',
+    catalog: 'SPLICES Ice Source Candidate (synthetic demo seed)',
     environment: 'Monoceros R2 / massive star-forming region',
     snr: 29.8,
     teffK: 7200,
@@ -857,6 +857,10 @@ export const MolecularIceStudio: React.FC = () => {
               ))}
             </optgroup>
           </Select>
+          <p className="mt-1 text-[10px] leading-relaxed text-muted-foreground">
+            Synthetic demo seeds behind molecular clouds. Replace with the official IRSA SPLICES
+            astrometric table for live science operations.
+          </p>
         </div>
 
         <div className="flex items-center justify-between gap-2 rounded-sm border border-border bg-card px-3 py-2">
