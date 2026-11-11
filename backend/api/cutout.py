@@ -52,6 +52,8 @@ cutout_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=5)
 tensor_cache = LRUCache()
 # Task state store
 task_states: dict[str, dict[str, Any]] = {}
+_active_request_tasks: dict[str, str] = {}
+_request_lock = asyncio.Lock()
 _worker_started = False
 _worker_lock = asyncio.Lock()
 _worker_task: asyncio.Task[None] | None = None
@@ -83,6 +85,7 @@ async def _enqueue_cutout_task(
     synth_a: dict | None,
     synth_b: dict | None,
     zodi_subtracted: bool,
+    request_key: str | None = None,
 ) -> str:
     task_id = _new_task_id()
     task_data = {
@@ -100,6 +103,7 @@ async def _enqueue_cutout_task(
         "stage": "queued",
         "message": "Task enqueued, waiting for processing",
         "created_at": time.time(),
+        "request_key": request_key,
     }
     try:
         cutout_queue.put_nowait(task_data)
@@ -139,6 +143,9 @@ async def _queue_worker() -> None:
             )
             logger.exception("Cutout worker failed for task %s", task_id)
         finally:
+            request_key = task.get("request_key")
+            if request_key and _active_request_tasks.get(request_key) == task.get("task_id"):
+                _active_request_tasks.pop(request_key, None)
             cutout_queue.task_done()
 
 
@@ -153,29 +160,62 @@ class CutoutRequest(BaseModel):
     zodi_subtracted: bool = False
 
 
+def _cutout_request_key(body: CutoutRequest) -> str:
+    """Return a stable key for requests that can share one active archive task."""
+    return json.dumps(
+        {
+            "ra": round(body.ra, 8),
+            "dec": round(body.dec, 8),
+            "fov_arcsec": body.fov_arcsec,
+            "bands": body.bands,
+            "adaptive_window": body.adaptive_window,
+            "synth_a": body.synth_a,
+            "synth_b": body.synth_b,
+            "zodi_subtracted": body.zodi_subtracted,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 @router.post("/cutout", status_code=202)
 async def create_cutout(
     body: CutoutRequest,
     background_tasks: BackgroundTasks,
 ) -> dict[str, Any]:
     """POST /api/cutout - Enqueue cutout task (202 or 503 Retry-After:15)."""
-    await _ensure_worker()
-    task_id = await _enqueue_cutout_task(
-        body.ra,
-        body.dec,
-        body.fov_arcsec,
-        body.bands,
-        body.adaptive_window,
-        body.synth_a,
-        body.synth_b,
-        body.zodi_subtracted,
-    )
-    task_states[task_id] = {
-        "status": "queued",
-        "progress": 0.0,
-        "stage": "queued",
-        "message": "Task enqueued, waiting for processing",
-    }
+    request_key = _cutout_request_key(body)
+    async with _request_lock:
+        existing_task_id = _active_request_tasks.get(request_key)
+        if existing_task_id:
+            existing_state = task_states.get(existing_task_id)
+            if existing_state and existing_state.get("status") in {"queued", "processing"}:
+                return {
+                    "task_id": existing_task_id,
+                    "status": existing_state["status"],
+                    "detail": "Matching cutout request already active; reusing its task",
+                }
+            _active_request_tasks.pop(request_key, None)
+
+        await _ensure_worker()
+        task_id = await _enqueue_cutout_task(
+            body.ra,
+            body.dec,
+            body.fov_arcsec,
+            body.bands,
+            body.adaptive_window,
+            body.synth_a,
+            body.synth_b,
+            body.zodi_subtracted,
+            request_key,
+        )
+        _active_request_tasks[request_key] = task_id
+        task_states[task_id] = {
+            "status": "queued",
+            "progress": 0.0,
+            "stage": "queued",
+            "message": "Task enqueued, waiting for processing",
+        }
     return {
         "task_id": task_id,
         "status": "queued",
