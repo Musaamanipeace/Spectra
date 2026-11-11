@@ -390,6 +390,14 @@ async def fetch_cutout_from_irsa(
                 response = await asyncio.wait_for(
                     client.get(cutout_url), timeout=min(30.0, remaining)
                 )
+                logger.info(
+                    "IRSA cutout attempt collection=%s attempt=%d status=%d bytes=%d duration_s=%.3f",
+                    collection,
+                    attempt + 1,
+                    response.status_code,
+                    len(response.content),
+                    time.monotonic() - started,
+                )
                 if response.status_code != 200:
                     logger.warning(
                         "IRSA Cutout returned HTTP %s for collection=%s: %s",
@@ -512,16 +520,24 @@ def _read_fits_image_section(
 class _HTTPRangeReader(io.RawIOBase):
     """Seekable FITS source backed by bounded anonymous HTTP Range requests."""
 
-    def __init__(self, url: str, block_size: int = 1024 * 1024) -> None:
+    def __init__(
+        self, url: str, block_size: int = 1024 * 1024, collection: str = "unknown"
+    ) -> None:
         super().__init__()
         self._url = url
+        self._collection = collection
         self._deadline = time.monotonic() + 60.0
         self._block_size = block_size
         self._position = 0
         self._cached_start = -1
         self._cached_data = b""
+        self.range_count = 0
+        self.bytes_fetched = 0
+        self.cache_hits = 0
+        self.range_duration_seconds = 0.0
         self._session = requests.Session()
         try:
+            probe_started = time.monotonic()
             response = self._session.get(
                 self._url, headers={"Range": "bytes=0-0"}, timeout=(10, 30)
             )
@@ -533,6 +549,9 @@ class _HTTPRangeReader(io.RawIOBase):
                     raise OSError("S3 endpoint did not honor the FITS byte-range request")
                 self._size = int(content_range[len(expected_prefix) :])
                 self._etag = response.headers.get("ETag")
+                self.range_count += 1
+                self.bytes_fetched += len(response.content)
+                self.range_duration_seconds += time.monotonic() - probe_started
             finally:
                 response.close()
         except Exception:
@@ -546,6 +565,7 @@ class _HTTPRangeReader(io.RawIOBase):
             with _RANGE_CACHE_LOCK:
                 cached = _RANGE_CACHE.get(cache_key)
             if cached is not None:
+                self.cache_hits += 1
                 return cached
         remaining = self._deadline - time.monotonic()
         if remaining <= 0:
@@ -553,6 +573,7 @@ class _HTTPRangeReader(io.RawIOBase):
         headers = {"Range": f"bytes={start}-{end}"}
         if self._etag:
             headers["If-Match"] = self._etag
+        range_started = time.monotonic()
         with self._session.get(
             self._url,
             headers=headers,
@@ -568,9 +589,12 @@ class _HTTPRangeReader(io.RawIOBase):
             data = response.content
             if len(data) != expected_size:
                 raise OSError("S3 returned an incomplete FITS byte range")
+            self.range_count += 1
+            self.bytes_fetched += len(data)
             if self._etag:
                 with _RANGE_CACHE_LOCK:
                     _RANGE_CACHE[cache_key] = data
+            self.range_duration_seconds += time.monotonic() - range_started
             return data
 
     def readable(self) -> bool:
@@ -622,6 +646,14 @@ class _HTTPRangeReader(io.RawIOBase):
 
     def close(self) -> None:
         if not self.closed:
+            logger.info(
+                "S3 range summary collection=%s ranges=%d bytes=%d cache_hits=%d duration_s=%.3f",
+                self._collection,
+                self.range_count,
+                self.bytes_fetched,
+                self.cache_hits,
+                self.range_duration_seconds,
+            )
             self._session.close()
         super().close()
 
@@ -660,7 +692,7 @@ def _fetch_cutout_from_s3(
         "metadata": {"collection": collection, "wcs": "TAN/SIP"},
     }
     with (
-        _HTTPRangeReader(object_url) as remote_file,
+        _HTTPRangeReader(object_url, collection=collection) as remote_file,
         fits.open(remote_file, memmap=False, lazy_load_hdus=True) as hdul,
     ):
         image_hdu = next(
@@ -1072,10 +1104,6 @@ async def ingest_exposures_for_target(
 
         fetched = await asyncio.gather(*(fetch_exposure(exp) for exp in selected))
         result["exposures"] = [exp for exp in fetched if exp is not None]
-        if progress_hook:
-            await progress_hook(
-                "coaddition", 0.7, f"Preparing {len(result['exposures'])} usable cutouts"
-            )
         if not result["exposures"]:
             result["error"] = "IRSA cutout service returned no usable MEF images"
             result["status"] = "no_cutouts"
