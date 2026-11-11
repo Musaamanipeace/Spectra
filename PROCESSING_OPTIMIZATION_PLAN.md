@@ -1,15 +1,17 @@
 # Time-Domain Processing Optimization Plan
 
-**Status:** Proposed. This plan does not claim the proposed concurrency or cache layers are already implemented.
+**Status:** Core latency controls implemented on the working branch; performance remains unbenchmarked.
 
 ## What we know
 
-- The queue is bounded at five waiting jobs and currently has one active queue consumer. Repeated identical browser POSTs could consume multiple queue slots; request coalescing now prevents that case.
+- The queue is bounded at five waiting jobs and now has two asynchronous consumers. Repeated identical browser POSTs are coalesced while the matching task is active.
 - A live duplicate-request check returned the same task ID for both POSTs. The task completed and returned a real QR2 tensor (`[3, 6, 29, 29]`, 11 contributing exposures).
 - For WISE 0855, live SIA returned 261 QR2 rows and zero QR3 rows. A QR2-only result is correct for that target; requesting QR3 cannot produce data where the archive reports no coverage.
 - For a QR3 object with coverage, the S3 fallback returned the required FITS HDUs. A single 1 MiB Range request took about 15 seconds in this development environment. This is one data point, not a service-wide throughput estimate.
-- Each IRSA cutout attempt can wait up to 45 seconds and gets one retry. A selected exposure can therefore occupy the task for up to 90 seconds before S3 fallback. The task fetches up to four selected exposures concurrently, but the semaphore is currently per task.
-- Stage timers are not recorded. Progress is advanced through all stage labels before the actual ingestion work begins, so the UI does not accurately report where the time goes.
+- IRSA uses at most two attempts within a shared 45-second deadline, then attempts S3. S3 range reads have a 60-second deadline after the initial range probe. A synchronous range-read thread cannot be forcibly stopped immediately when its awaiting coroutine is cancelled.
+- An archive semaphore caps concurrent operations at four across both task workers. Reprojection runs off the event loop with at most two concurrent thread calls.
+- Queue wait, stage durations, SIA duration/rows, selected exposure counts, and per-exposure source/duration are logged. Separate S3 range counts/bytes, wavelength-match counts, and coaddition timing are not yet logged.
+- Progress now changes as work reaches each real stage and advances per fetched exposure. The configured cache paths have not yet been measured for hit rate or cold/warm latency.
 
 ## Recommended order
 
@@ -22,7 +24,7 @@ Add structured durations and counts for queue wait, SIA by release, SIA row coun
 - Keep active-request coalescing.
 - Cache SIA results for 10 minutes by normalized coordinate cone and release.
 - Cache completed tensors for 15 minutes by request fingerprint, not only by random task ID.
-- Add a bounded source-object cache keyed by object URL and ETag. Cache hits must preserve the exposure's release badge.
+- S3 byte ranges are cached in process (64 MiB) by object URL, ETag, and range. Cache hits preserve the source exposure's collection metadata.
 - Stop retrying a release after SIA reports zero rows; represent that release as “no coverage”.
 
 ### 3. Reduce bytes for Tab 2
@@ -34,7 +36,7 @@ Add structured durations and counts for queue wait, SIA by release, SIA row coun
 
 ### 4. Add bounded concurrency
 
-After the baseline, run two asynchronous task workers in one FastAPI process, with one shared archive-I/O semaphore capped at four requests. Keep CPU-heavy reprojection in a two-worker process pool. This reduces waiting between different requests; it does not make one archive response faster. Preserve the five waiting slots until telemetry shows whether queue depth should change.
+Two asynchronous task workers, one shared archive-I/O semaphore capped at four operations, and two bounded reprojection thread calls are implemented. This can reduce waiting between different requests; it does not make one archive response faster. Preserve the five waiting slots until telemetry shows whether queue depth should change. Threads avoid copying large arrays and WCS objects into child processes; benchmark before considering a process pool.
 
 Do not run multiple Uvicorn processes against the current in-memory queue and task dictionaries. If two async workers are insufficient, first move task state, idempotency keys, and queue claims to a shared durable queue/store, then scale API/worker processes.
 
