@@ -1094,7 +1094,7 @@ async def ingest_exposures_for_target(
                     await progress_hook(
                         "fetching",
                         0.4 + 0.28 * fraction,
-                        f"Fetched {completed_fetches} of {len(selected)} cutouts",
+                        f"Finished {completed_fetches} of {len(selected)} cutout fetch attempts",
                     )
             if cutout.get("hdu1_image") is None or cutout.get("hdu1_header") is None:
                 return None
