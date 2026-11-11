@@ -382,6 +382,7 @@ export const CelestialNavigator: React.FC = () => {
   const [aladinReady, setAladinReady] = useState<boolean>(false);
   const [archiveExposures, setArchiveExposures] = useState<IrsaExposure[]>([]);
   const [archiveStatus, setArchiveStatus] = useState<'loading' | 'ready' | 'empty' | 'error'>('loading');
+  const [selectedArchiveObsId, setSelectedArchiveObsId] = useState<string | null>(null);
   const [gaiaStatus, setGaiaStatus] = useState<'loading' | 'live' | 'unavailable'>('loading');
   const [skybotStatus, setSkybotStatus] = useState<'loading' | 'live' | 'cached_only' | 'unavailable'>('loading');
   const [showSyntheticPreview, setShowSyntheticPreview] = useState<boolean>(false);
@@ -494,6 +495,10 @@ export const CelestialNavigator: React.FC = () => {
 
   const coverageDepth = useMemo(() => computeCoverageDepth(ra, dec), [ra, dec]);
   const sexagesimalTarget = useMemo(() => formatSexagesimal(ra, dec), [ra, dec]);
+  const selectedArchiveExposure = useMemo(
+    () => archiveExposures.find((exposure) => exposure.obsId === selectedArchiveObsId) ?? null,
+    [archiveExposures, selectedArchiveObsId]
+  );
 
   // Mount Aladin Lite v3 WebGL2 Progressive HiPS All-Sky Engine (100% Native, No Fake Canvases)
   useEffect(() => {
@@ -1203,15 +1208,16 @@ export const CelestialNavigator: React.FC = () => {
   };
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-background font-sans text-xs text-foreground select-none">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-background font-sans text-xs text-foreground select-none lg:flex-row">
       {/* LEFT 70%: Native Aladin Lite v3 WebGL2 Sky Viewport */}
-      <div className="relative flex flex-1 flex-col overflow-hidden">
+      <div className="relative flex min-h-0 w-full flex-1 flex-col overflow-hidden lg:w-auto">
         {/* Top Overlay Instrument Toolbar (Modelled after IRSA Firefly Layer & Band Bar) */}
         <div
           onMouseDown={(e) => e.stopPropagation()}
           onDoubleClick={(e) => e.stopPropagation()}
-          className="z-20 flex flex-wrap items-center justify-between gap-2 border-b border-border bg-card px-3 py-1.5"
+          className="z-20 max-h-36 overflow-y-auto border-b border-border bg-card px-3 py-1.5 lg:max-h-none"
         >
+          <div className="flex flex-wrap items-center justify-between gap-2">
           {/* Layer Toggles */}
           <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Sky overlay layers">
             <Button
@@ -1353,11 +1359,12 @@ export const CelestialNavigator: React.FC = () => {
               1.2°
             </Button>
           </div>
+          </div>
         </div>
 
         {/* 100% Native Aladin Lite v3 WebGL2 All-Sky HiPS Viewport */}
         <div
-          className="relative flex-1 w-full overflow-hidden bg-black"
+          className="relative min-h-0 w-full flex-1 overflow-hidden bg-black"
         >
           {/* Aladin Lite v3 Canvas Container (Receives all drag, scroll, touch, and click events directly) */}
           <div
@@ -1471,15 +1478,15 @@ export const CelestialNavigator: React.FC = () => {
       </div>
 
       {/* RIGHT 30%: SPHEREx Spectral Image Search & Footprint Inspector (Modelled on IRSA search-spectral-images) */}
-      <aside className="flex w-[380px] xl:w-[430px] shrink-0 flex-col border-l border-border bg-card">
+      <aside className="flex max-h-[48%] min-h-[240px] w-full shrink-0 flex-col border-t border-border bg-card lg:max-h-none lg:min-h-0 lg:w-[380px] lg:border-l lg:border-t-0 xl:w-[430px]">
         {/* 1. Target Position & Spatial Cutout Parameters */}
         <div className="border-b border-border p-3">
           <div className="flex items-center justify-between">
             <h2 className="text-xs font-semibold text-foreground">
-              SPHEREx Coverage Preview
+              Selected region
             </h2>
-            <Badge variant="sky" className="font-mono text-[10px]">
-              SIMULATED PREVIEW
+            <Badge variant={archiveStatus === 'ready' ? 'sky' : archiveStatus === 'error' ? 'amber' : 'outline'} className="font-mono text-[10px]">
+              {archiveStatus === 'ready' ? 'IRSA LIVE · SPHEREx QR2' : archiveStatus === 'empty' ? 'NO ARCHIVE MATCH' : archiveStatus === 'error' ? 'ARCHIVE UNAVAILABLE' : 'SEARCHING ARCHIVE'}
             </Badge>
           </div>
 
@@ -1505,6 +1512,11 @@ export const CelestialNavigator: React.FC = () => {
             </div>
             <div className="font-mono text-[10px] tabular-nums text-muted-foreground">
               {sexagesimalTarget}
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2 border-t border-border pt-2 text-[10px]">
+              <div><span className="block text-muted-foreground">Archive matches</span><strong className="mt-0.5 block font-mono text-foreground">{archiveStatus === 'loading' ? 'Searching…' : archiveStatus === 'error' ? 'Unavailable' : archiveExposures.length}</strong></div>
+              <div><span className="block text-muted-foreground">Survey cadence estimate</span><strong className="mt-0.5 block text-foreground">{coverageDepth.cadenceLabel}</strong></div>
+              <div className="col-span-2"><span className="text-muted-foreground">Archive / release</span><strong className="ml-2 text-foreground">{archiveStatus === 'ready' ? 'IRSA · spherex_qr2' : 'Not confirmed for this position'}</strong></div>
             </div>
           </div>
 
@@ -1573,11 +1585,9 @@ export const CelestialNavigator: React.FC = () => {
         </div>
 
         {/* 2. Synchronized SPHEREx Level-2 Spectral Image Table (Hover highlights LVF footprint on sky) */}
-        <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
           <div className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-1.5">
-            <span className="text-[11px] font-medium text-foreground">
-              IRSA SPHEREx QR2 Archive ({archiveExposures.length})
-            </span>
+            <span className="text-[11px] font-medium text-foreground">Observation matches ({archiveExposures.length})</span>
             <span className="text-[10px] text-muted-foreground">
               {archiveStatus === 'loading' && 'Searching IRSA…'}
               {archiveStatus === 'ready' && '[IRSA Live (spherex_qr2)]'}
@@ -1592,14 +1602,17 @@ export const CelestialNavigator: React.FC = () => {
               cutoutUrl.searchParams.set('center', `${ra},${dec}`);
               cutoutUrl.searchParams.set('size', String(fovArcsec / 3600));
               return (
-                <div key={exposure.obsId} className="flex items-center justify-between gap-2 border-b border-border/60 px-3 py-1.5 font-mono text-[10px]">
-                  <span className="min-w-0 truncate text-foreground" title={exposure.obsId}>{exposure.obsId}</span>
-                  <span className="shrink-0 text-muted-foreground">{exposure.detector}</span>
-                  <span className="shrink-0 text-muted-foreground">{exposure.mjd ? `MJD ${exposure.mjd}` : exposure.wavelength}</span>
-                  <a className="shrink-0 text-primary hover:underline" href={cutoutUrl.toString()} target="_blank" rel="noreferrer">Open FITS cutout</a>
+                <div key={exposure.obsId} className={`flex items-center gap-2 border-b border-border/60 px-2 py-1.5 font-mono text-[10px] ${selectedArchiveObsId === exposure.obsId ? 'bg-secondary' : ''}`}>
+                  <button type="button" onClick={() => setSelectedArchiveObsId(exposure.obsId)} aria-pressed={selectedArchiveObsId === exposure.obsId} className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded px-1 py-1 text-left hover:bg-secondary/70">
+                    <span className="min-w-0 truncate text-foreground" title={exposure.obsId}>{exposure.obsId}</span>
+                    <span className="shrink-0 text-muted-foreground">{exposure.detector}</span>
+                    <span className="shrink-0 text-muted-foreground">{exposure.mjd ? `MJD ${exposure.mjd}` : exposure.wavelength}</span>
+                  </button>
+                  <a className="shrink-0 text-primary hover:underline" href={cutoutUrl.toString()} target="_blank" rel="noreferrer">FITS ↗</a>
                 </div>
               );
             })}
+            {selectedArchiveExposure && <div className="border-b border-border bg-background px-3 py-2 text-[10px]" aria-live="polite"><span className="font-semibold text-foreground">Selected archive match</span><span className="ml-2 font-mono text-primary">{selectedArchiveExposure.obsId}</span><span className="ml-2 text-muted-foreground">{selectedArchiveExposure.detector} · {selectedArchiveExposure.mjd ? `MJD ${selectedArchiveExposure.mjd}` : selectedArchiveExposure.wavelength} · SPHEREx QR2</span></div>}
             {archiveStatus === 'empty' && (
               <div className="px-3 py-2 text-[10px] text-muted-foreground">This is an honest non-detection for the selected cutout and current public release.</div>
             )}
@@ -1681,7 +1694,7 @@ export const CelestialNavigator: React.FC = () => {
           {activeExposure && (
             <div className="border-t border-border bg-background px-3 py-2 text-[11px]">
               <div className="flex items-center justify-between text-foreground">
-                <span className="font-mono text-[10px] text-primary">{activeExposure.obsId} · Synthetic</span>
+                <span className="font-mono text-[10px] text-primary">[Synthetic Injection Mode] · {activeExposure.obsId}</span>
                 <span className="font-mono text-[10px] text-muted-foreground">{activeExposure.dateUtc}</span>
               </div>
               <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">

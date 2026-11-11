@@ -12,6 +12,7 @@ from typing import Any
 
 try:
     from backend.api.classify import router as classify_router
+    from backend.api.admin import router as admin_router
     from backend.api.cutout import router as cutout_router
     from backend.api.export import router as export_router
     from backend.api.forum import router as forum_router
@@ -19,6 +20,7 @@ try:
     from backend.api.spectrum import router as spectrum_router
 except ImportError:
     from api.classify import router as classify_router  # type: ignore
+    from api.admin import router as admin_router  # type: ignore
     from api.cutout import router as cutout_router  # type: ignore
     from api.export import router as export_router  # type: ignore
     from api.forum import router as forum_router  # type: ignore
@@ -69,6 +71,7 @@ app.add_middleware(
 app.include_router(resolve_router)
 app.include_router(cutout_router)
 app.include_router(classify_router)
+app.include_router(admin_router)
 app.include_router(spectrum_router)
 app.include_router(forum_router)
 app.include_router(export_router)

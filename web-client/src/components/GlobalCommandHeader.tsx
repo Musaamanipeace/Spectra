@@ -417,7 +417,13 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
   const [isBackendLive, setIsBackendLive] = useState(false);
   const [shareFeedback, setShareFeedback] = useState<string | null>(null);
   const [isShareOpen, setIsShareOpen] = useState(false);
+  const [isScienceMenuOpen, setIsScienceMenuOpen] = useState(false);
+  const [isWorkspaceMenuOpen, setIsWorkspaceMenuOpen] = useState(false);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+  const scienceMenuRef = useRef<HTMLDivElement>(null);
+  const workspaceMenuRef = useRef<HTMLDivElement>(null);
+  const scienceTriggerRef = useRef<HTMLButtonElement>(null);
+  const workspaceTriggerRef = useRef<HTMLButtonElement>(null);
 
   // Close autocomplete dropdown on outside click
   useEffect(() => {
@@ -427,6 +433,12 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
         !searchContainerRef.current.contains(e.target as Node)
       ) {
         setIsSearchFocused(false);
+      }
+      if (scienceMenuRef.current && !scienceMenuRef.current.contains(e.target as Node)) {
+        setIsScienceMenuOpen(false);
+      }
+      if (workspaceMenuRef.current && !workspaceMenuRef.current.contains(e.target as Node)) {
+        setIsWorkspaceMenuOpen(false);
       }
     };
     document.addEventListener('mousedown', handleClickOutside);
@@ -636,74 +648,72 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
     setTimeout(() => setShareFeedback(null), 2500);
   };
 
+  const selectWorkspace = (nextTab: string) => {
+    setTab(nextTab);
+    setIsScienceMenuOpen(false);
+    setIsWorkspaceMenuOpen(false);
+    if (isMissionBriefingActive) onToggleMissionBriefing?.();
+  };
+
+  const closeWorkspaceMenus = () => {
+    const returnFocusTo = isWorkspaceMenuOpen
+      ? workspaceTriggerRef.current
+      : scienceTriggerRef.current;
+    setIsScienceMenuOpen(false);
+    setIsWorkspaceMenuOpen(false);
+    returnFocusTo?.focus();
+  };
+
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 flex h-[56px] items-center justify-between gap-3 border-b border-border bg-black/90 backdrop-blur-md px-4 font-sans text-xs text-foreground select-none">
-      {/* 1. Official NASA Branding & Mission Status */}
-      <div className="flex items-center gap-3 shrink-0">
-        <div className="flex items-center gap-2.5">
-          <NasaMeatballSvg className="h-6 w-7 drop-shadow-sm" />
-          <div className="flex flex-col">
-            <span className="text-sm font-extrabold tracking-tight text-white leading-none">
-              SPHEREx
-            </span>
-            <span className="hidden sm:inline text-[9px] tracking-wider uppercase text-neutral-400 font-medium">
-              NASA All-Sky Survey
-            </span>
-          </div>
-        </div>
+    <header className="fixed top-0 left-0 right-0 z-50 flex h-[56px] items-center justify-between gap-2 border-b border-border bg-black/90 backdrop-blur-md px-2 sm:px-4 font-sans text-xs text-foreground">
+      <div className="flex min-w-0 shrink-0 items-center gap-2">
+        <a href="/" aria-label="Spectra home" className="flex min-w-0 items-center gap-2">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-sky-300/50 bg-sky-300/10 text-sky-200" aria-hidden="true">
+            <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none">
+              <path d="M4 16.5 9.2 6l2.8 5.5L14 8l6 10H4Z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+              <circle cx="17.5" cy="5.5" r="1" fill="currentColor" />
+            </svg>
+          </span>
+          <span className="flex min-w-0 flex-col">
+            <span className="text-sm font-extrabold tracking-[0.12em] text-white leading-none">SPECTRA</span>
+            <span className="hidden sm:inline truncate text-[9px] tracking-wide text-neutral-400">Community Product · SPHEREx data</span>
+          </span>
+        </a>
 
-        <span className="h-4 w-px bg-neutral-800" aria-hidden="true" />
-
-        {/* Option A: Mission Briefing Toggle Button */}
-        {onToggleMissionBriefing && (
-          <button
-            type="button"
-            onClick={onToggleMissionBriefing}
-            className={cn(
-              'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all',
-              isMissionBriefingActive
-                ? 'bg-primary text-white shadow-sm ring-1 ring-primary/50'
-                : 'border border-neutral-700 bg-neutral-900/80 text-neutral-300 hover:border-neutral-500 hover:text-white'
-            )}
-            title="Toggle between NASA SPHEREx Mission Launchpad and Workstation"
-          >
-            <span>{isMissionBriefingActive ? 'Sky Workstation' : 'Mission Briefing'}</span>
-          </button>
-        )}
-
-        {/* Active Mission Operational Status Badge */}
-        <div
-          className="flex items-center gap-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 px-2.5 py-0.5 text-[11px] font-medium text-emerald-400 cursor-default"
-          title="SPHEREx Operational Status: All 6 Near-IR Detectors Active (0.75 - 5.0 μm)"
+        <span
+          className={cn(
+            'hidden lg:flex shrink-0 items-center gap-1.5 rounded-full border px-2 py-1 text-[10px] font-medium',
+            isBackendLive
+              ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-300'
+              : 'border-amber-500/25 bg-amber-500/10 text-amber-300'
+          )}
+          title={isBackendLive ? 'The backend health endpoint responded.' : 'The backend health endpoint is unavailable; data-source badges describe the displayed content.'}
+          aria-label={isBackendLive ? 'Backend online' : 'Backend unavailable'}
         >
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="hidden lg:inline">Active Mission</span>
-          <span className="lg:hidden">Active</span>
-        </div>
+          <span className={cn('h-1.5 w-1.5 rounded-full', isBackendLive ? 'bg-emerald-400' : 'bg-amber-400')} />
+          {isBackendLive ? 'API online' : 'API unavailable'}
+        </span>
 
-        {/* Data Provenance Badge */}
         <Badge
           variant="secondary"
-          className="hidden 2xl:inline-flex font-mono text-[10px] tabular-nums bg-neutral-900 border-neutral-800 text-neutral-400"
-          title="Active dataset provenance"
+          className="hidden 2xl:inline-flex shrink-0 font-mono text-[10px] tabular-nums bg-neutral-900 border-neutral-800 text-neutral-400"
+          title="Source of the currently displayed data"
         >
           {sourceBadge}
         </Badge>
 
-        {/* Authoritative Source Catalog Button */}
         {onOpenCatalog && (
           <button
             type="button"
             onClick={onOpenCatalog}
-            className="hidden md:flex items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900/80 hover:bg-neutral-800 hover:border-neutral-700 px-3 py-1 text-xs font-medium text-neutral-300 hover:text-white transition-all shadow-sm"
-            title="Browse all 24 calibrated astronomical targets across the survey"
+            className="hidden lg:flex shrink-0 items-center gap-1.5 rounded-full border border-neutral-800 bg-neutral-900/80 px-2.5 py-1 text-[11px] font-medium text-neutral-300 transition-colors hover:border-neutral-600 hover:bg-neutral-800 hover:text-white"
+            title={`Browse ${SEARCHABLE_SKY_CATALOG.length} targets in the source catalog`}
           >
-            <svg className="h-3.5 w-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <svg className="h-3.5 w-3.5 text-primary" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" />
             </svg>
-            <span className="hidden xl:inline">Source Catalog</span>
-            <span className="xl:hidden">Catalog</span>
-            <span className="rounded-full bg-primary/20 px-1.5 py-0.2 text-[10px] font-mono text-primary">24</span>
+            <span>Catalog</span>
+            <span className="rounded-full bg-primary/20 px-1.5 py-0.2 text-[10px] font-mono text-primary">{SEARCHABLE_SKY_CATALOG.length}</span>
           </button>
         )}
       </div>
@@ -871,36 +881,165 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
         </div>
 
         <nav
-          aria-label="Workspaces"
-          className="flex items-center gap-1 rounded-full border border-neutral-800 bg-neutral-950/90 p-0.5"
+          aria-label="Primary navigation"
+          className="hidden xl:flex items-center gap-1 rounded-full border border-neutral-800 bg-neutral-950/90 p-0.5"
         >
-          {TABS.map((t) => {
-            const isActive = tab === t.id && !isMissionBriefingActive;
-            return (
-              <Button
-                key={t.id}
-                variant={isActive ? 'secondary' : 'ghost'}
-                size="sm"
-                onClick={() => {
-                  setTab(t.id);
-                  if (isMissionBriefingActive && onToggleMissionBriefing) {
-                    onToggleMissionBriefing();
+          <Button
+            variant={tab === 'navigator' && !isMissionBriefingActive ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => selectWorkspace('navigator')}
+            aria-current={tab === 'navigator' && !isMissionBriefingActive ? 'page' : undefined}
+            className={cn('h-7 rounded-full px-3 text-xs', tab === 'navigator' && !isMissionBriefingActive ? 'bg-primary font-medium text-white' : 'text-neutral-300 hover:bg-neutral-900 hover:text-white')}
+            title="Celestial Navigator"
+          >
+            Explore
+          </Button>
+
+          <div ref={scienceMenuRef} className="relative">
+            <button
+              ref={scienceTriggerRef}
+              type="button"
+              onClick={() => setIsScienceMenuOpen((open) => !open)}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closeWorkspaceMenus();
+                }
+              }}
+              aria-expanded={isScienceMenuOpen}
+              aria-controls="science-workspaces-menu"
+              aria-current={['comparator', 'spectral', 'ice'].includes(tab) && !isMissionBriefingActive ? 'page' : undefined}
+              className={cn(
+                'inline-flex h-7 items-center gap-1 rounded-full px-3 text-xs transition-colors',
+                ['comparator', 'spectral', 'ice'].includes(tab) && !isMissionBriefingActive
+                  ? 'bg-primary font-medium text-white'
+                  : 'text-neutral-300 hover:bg-neutral-900 hover:text-white'
+              )}
+            >
+              Science
+              <svg viewBox="0 0 16 16" className={cn('h-3 w-3 transition-transform', isScienceMenuOpen && 'rotate-180')} fill="none" aria-hidden="true">
+                <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {isScienceMenuOpen && (
+              <div
+                id="science-workspaces-menu"
+                className="absolute left-0 top-10 z-50 w-64 rounded-xl border border-border bg-popover p-2 shadow-2xl"
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    event.preventDefault();
+                    closeWorkspaceMenus();
                   }
                 }}
-                aria-current={isActive ? 'page' : undefined}
-                className={cn(
-                  'h-7 px-2.5 sm:px-3 text-xs font-sans rounded-full transition-all',
-                  isActive
-                    ? 'bg-primary text-white font-medium shadow-sm'
-                    : 'text-neutral-400 hover:text-white hover:bg-neutral-900'
-                )}
               >
-                <span className="opacity-60 text-[10px] font-mono mr-1.5">{t.number}</span>
-                <span>{t.label}</span>
-              </Button>
-            );
-          })}
+                <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Science workspaces</p>
+                {TABS.slice(1, 4).map((workspace) => {
+                  const isActive = tab === workspace.id && !isMissionBriefingActive;
+                  return (
+                    <button
+                      key={workspace.id}
+                      type="button"
+                      onClick={() => selectWorkspace(workspace.id)}
+                      aria-current={isActive ? 'page' : undefined}
+                      className={cn(
+                        'flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-xs transition-colors',
+                        isActive ? 'bg-primary/15 text-primary' : 'text-foreground hover:bg-secondary'
+                      )}
+                    >
+                      <span className="font-mono text-[10px] text-muted-foreground">{workspace.number.padStart(2, '0')}</span>
+                      <span>{workspace.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <Button
+            variant={tab === 'discussions' && !isMissionBriefingActive ? 'secondary' : 'ghost'}
+            size="sm"
+            onClick={() => selectWorkspace('discussions')}
+            aria-current={tab === 'discussions' && !isMissionBriefingActive ? 'page' : undefined}
+            className={cn('h-7 rounded-full px-3 text-xs', tab === 'discussions' && !isMissionBriefingActive ? 'bg-primary font-medium text-white' : 'text-neutral-300 hover:bg-neutral-900 hover:text-white')}
+            title="Observation Discussions and candidate review"
+          >
+            Review
+          </Button>
         </nav>
+
+        <div ref={workspaceMenuRef} className="relative xl:hidden">
+          <button
+            ref={workspaceTriggerRef}
+            type="button"
+            onClick={() => setIsWorkspaceMenuOpen((open) => !open)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                closeWorkspaceMenus();
+              }
+            }}
+            aria-expanded={isWorkspaceMenuOpen}
+            aria-controls="compact-workspaces-menu"
+            aria-label="Open workspaces and target catalog"
+            className="inline-flex h-8 items-center gap-1 rounded-full border border-neutral-700 bg-neutral-900 px-2 sm:px-3 text-xs text-neutral-100 hover:border-neutral-500"
+          >
+            <span className="hidden sm:inline">Workspaces</span>
+            <span className="sm:hidden">Menu</span>
+            <svg viewBox="0 0 16 16" className={cn('h-3 w-3 transition-transform', isWorkspaceMenuOpen && 'rotate-180')} fill="none" aria-hidden="true">
+              <path d="m4 6 4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+          {isWorkspaceMenuOpen && (
+            <div
+              id="compact-workspaces-menu"
+              className="absolute right-0 top-10 z-50 w-72 max-w-[calc(100vw-1rem)] rounded-xl border border-border bg-popover p-2 shadow-2xl"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  closeWorkspaceMenus();
+                }
+              }}
+            >
+              <p className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Explore Spectra</p>
+              <button type="button" onClick={() => selectWorkspace('navigator')} className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs text-foreground hover:bg-secondary">
+                Explore · Celestial Navigator
+              </button>
+              <div role="group" aria-label="Science workspaces" className="mt-1 border-t border-border pt-1">
+                <p className="px-2.5 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Science</p>
+                {TABS.slice(1, 4).map((workspace) => (
+                  <button
+                    key={workspace.id}
+                    type="button"
+                    onClick={() => selectWorkspace(workspace.id)}
+                    aria-current={tab === workspace.id && !isMissionBriefingActive ? 'page' : undefined}
+                    className={cn(
+                      'flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left text-xs transition-colors',
+                      tab === workspace.id && !isMissionBriefingActive ? 'bg-primary/15 text-primary' : 'text-foreground hover:bg-secondary'
+                    )}
+                  >
+                    <span className="font-mono text-[10px] text-muted-foreground">{workspace.number.padStart(2, '0')}</span>
+                    <span>{workspace.label}</span>
+                  </button>
+                ))}
+              </div>
+              <button type="button" onClick={() => selectWorkspace('discussions')} className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs text-foreground hover:bg-secondary">
+                Review · Observation Discussions
+              </button>
+              {onOpenCatalog && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsWorkspaceMenuOpen(false);
+                    onOpenCatalog();
+                  }}
+                  className="mt-1 flex w-full items-center border-t border-border px-2.5 pt-3 pb-2 text-left text-xs text-primary hover:text-sky-200"
+                >
+                  Browse target catalog
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         {/* Share & Embed Exporter Dropdown */}
         <div className="relative">

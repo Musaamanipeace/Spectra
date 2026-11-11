@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { useAdminTelemetry } from './hooks/useAdminTelemetry';
+import { useAdminTelemetry } from './hooks/useAdminTelemetryLive';
+import { AdminDataState } from './AdminDataState';
 import { Button, Badge } from '../components/ui';
 import { cn } from '../lib/utils';
 
@@ -8,9 +9,8 @@ import { cn } from '../lib/utils';
  * Specification Anchors: SPECIFICATION.md §6.4.4
  * 
  * Renders step-by-step morphing of classification boundaries across input space:
- * - Coordinate Space: 3D Physical Astrophysical Axes vs 102-Band UMAP Latent Space
- * - Dynamic Decision Surface P(Mover) = 0.5 isosurface meshgrid morphing across epochs (1 -> 50)
- * - 3D benchmark points: WISE 0855, Barnard's Star, Epsilon Indi B, RW Aurigae, R Draconis
+ * - Physical feature-space inspection of points included in persisted telemetry
+ * - A learned probability surface is shown only when returned by the backend
  * - Highlight toggles: Newly Injected Community Labels, Misclassified Hard Negatives
  * - Playback trajectory controls and interactive 3D camera rotation/zoom
  */
@@ -19,6 +19,8 @@ export const DecisionBoundaries: React.FC = () => {
     activeEpoch,
     totalEpochs,
     currentFrame,
+    isLoading,
+    loadError,
     isRunning,
     isPaused,
     startTrainingRun,
@@ -37,7 +39,6 @@ export const DecisionBoundaries: React.FC = () => {
   const dragStartRef = useRef<{ x: number; y: number; rotX: number; rotY: number }>({ x: 0, y: 0, rotX: 0, rotY: 0 });
 
   // Toggles
-  const [coordSpace, setCoordSpace] = useState<'physical' | 'umap'>('physical');
   const [showCommunityLabels, setShowCommunityLabels] = useState<boolean>(true);
   const [showHardNegatives, setShowHardNegatives] = useState<boolean>(true);
   const [hoveredPoint, setHoveredPoint] = useState<any | null>(null);
@@ -175,63 +176,7 @@ export const DecisionBoundaries: React.FC = () => {
     const pZ = project(-1, -1, 1.2);
     ctx.fillText('Z: Ice Depth (τ)', pZ.px, pZ.py);
 
-    // Decision Surface P(Mover) = 0.5 meshgrid evaluation (SPECIFICATION.md §6.4.4)
-    // As epochs advance, boundary shifts from linear plane into warped non-linear manifold
-    const morph = (currentFrame?.decision_surface_offset || 0) * 0.35;
-    const epochRatio = activeEpoch / totalEpochs;
-
-    // Generate 12x12 3D mesh surface
-    const meshSteps = 12;
-    const meshPoints: Array<{ px: number; py: number; depth: number }[]> = [];
-
-    for (let i = 0; i <= meshSteps; i++) {
-      const u = -0.9 + (i / meshSteps) * 1.8; // X: IR color
-      const row: { px: number; py: number; depth: number }[] = [];
-      for (let j = 0; j <= meshSteps; j++) {
-        const v = -0.9 + (j / meshSteps) * 1.8; // Z: Ice depth
-
-        // Height Y of decision boundary P(Mover)=0.5
-        // At Epoch 1: Linear threshold Y = -0.2 (SNR > 6)
-        // At Epoch 50: Non-linear hyperbolic manifold: requires high SNR when IR Color is low (rejecting artifacts)
-        const linearY = -0.2;
-        const warpedY = -0.4 + 0.8 * Math.exp(-u * 1.5) - 0.25 * Math.sin(v * 2.0) + morph * 0.15;
-        const yVal = linearY * (1 - epochRatio) + warpedY * epochRatio;
-
-        const p = project(u, Math.max(-0.95, Math.min(0.95, yVal)), v);
-        row.push(p);
-      }
-      meshPoints.push(row);
-    }
-
-    // Render Meshgrid Quads with Depth Shading
-    for (let i = 0; i < meshSteps; i++) {
-      for (let j = 0; j < meshSteps; j++) {
-        const p00 = meshPoints[i][j];
-        const p10 = meshPoints[i + 1][j];
-        const p11 = meshPoints[i + 1][j + 1];
-        const p01 = meshPoints[i][j + 1];
-
-        const avgDepth = (p00.depth + p10.depth + p11.depth + p01.depth) / 4;
-        const depthAlpha = Math.max(0.12, Math.min(0.45, 0.25 + avgDepth * 0.15));
-
-        // Translucent blue decision surface
-        ctx.fillStyle = `rgba(56, 189, 248, ${depthAlpha})`;
-        ctx.beginPath();
-        ctx.moveTo(p00.px, p00.py);
-        ctx.lineTo(p10.px, p10.py);
-        ctx.lineTo(p11.px, p11.py);
-        ctx.lineTo(p01.px, p01.py);
-        ctx.closePath();
-        ctx.fill();
-
-        // Wireframe lines
-        ctx.strokeStyle = `rgba(56, 189, 248, ${depthAlpha * 1.5})`;
-        ctx.lineWidth = 0.75;
-        ctx.stroke();
-      }
-    }
-
-    // Benchmark Target Points & Community Injections
+    // Plot only points included in the persisted telemetry frame.
     const points = currentFrame?.community_points || [];
     points.forEach((pt) => {
       // Map physical ranges to [-1, 1] normalized cube:
@@ -282,42 +227,17 @@ export const DecisionBoundaries: React.FC = () => {
       ctx.fillText(pt.label, p.px + 8, p.py + 3);
     });
 
-    // P(Mover) = 0.5 Surface Marker
-    const pSurface = project(0.4, -0.1, 0.4);
-    ctx.fillStyle = '#38BDF8';
-    ctx.font = '10px sans-serif';
-    ctx.fillText('Dynamic decision surface P(mover)=0.5', pSurface.px + 10, pSurface.py - 10);
   }, [rotX, rotY, zoom, activeEpoch, totalEpochs, currentFrame, showCommunityLabels, showHardNegatives]);
+
+  if (isLoading || !currentFrame) {
+    return <AdminDataState title={loadError ? 'Decision telemetry unavailable' : 'No persisted decision surface'} detail={loadError ?? 'This view requires real decision-surface and community-point telemetry from a stored model run. No generated surface is substituted.'} loading={isLoading} />;
+  }
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground p-4 gap-4 overflow-y-auto">
       {/* COORDINATE SPACE & TRAJECTORY CONTROLLER */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-sm border border-border bg-card p-3 shadow-sm">
-        <div className="flex items-center gap-4 text-xs">
-          <span className="font-semibold text-foreground">
-            Coordinate space:
-          </span>
-          <label className="flex items-center gap-1.5 cursor-pointer text-foreground">
-            <input
-              type="radio"
-              name="coordSpace"
-              checked={coordSpace === 'physical'}
-              onChange={() => setCoordSpace('physical')}
-              className="accent-primary"
-            />
-            <span>3D physical astrophysical axes</span>
-          </label>
-          <label className="flex items-center gap-1.5 cursor-pointer text-muted-foreground hover:text-foreground">
-            <input
-              type="radio"
-              name="coordSpace"
-              checked={coordSpace === 'umap'}
-              onChange={() => setCoordSpace('umap')}
-              className="accent-primary"
-            />
-            <span>102-band UMAP latent space</span>
-          </label>
-        </div>
+        <span className="text-xs font-semibold text-foreground">Physical feature axes</span>
 
         {/* Highlight Checkboxes */}
         <div className="flex items-center gap-4 text-xs">
@@ -402,7 +322,7 @@ export const DecisionBoundaries: React.FC = () => {
               variant={isRunning && !isPaused ? 'secondary' : 'default'}
               onClick={isRunning && !isPaused ? pauseTrainingRun : (isPaused ? resumeTrainingRun : startTrainingRun)}
             >
-              {isRunning && !isPaused ? 'Pause trajectory' : 'Play boundary trajectory (epochs 1 → 50)'}
+              {isRunning && !isPaused ? 'Pause history' : 'Play stored run'}
             </Button>
             <Button
               size="xs"
@@ -437,7 +357,7 @@ export const DecisionBoundaries: React.FC = () => {
           </div>
 
           <div className="text-[11px] text-muted-foreground">
-            Morph: <span className="font-mono text-emerald-400">Non-linear warp active</span>
+            Decision surface: <span className="font-mono text-amber-300">Not included in persisted telemetry</span>
           </div>
         </div>
       </div>

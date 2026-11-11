@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="960" viewBox="0 0 1440 960" role="img" aria-labelledby="title desc">
+  <title id="title">Spectra Mission Control proposed layout</title>
+  <desc id="desc">An admin workspace shell with a persistent read-only status, five-workspace sidebar, a large primary visualization placeholder, and operational detail panel. No live metrics are shown.</desc>
+  <defs>
+    <linearGradient id="bg" x2="0" y2="1"><stop stop-color="#0b1522"/><stop offset="1" stop-color="#111c2b"/></linearGradient>
+    <linearGradient id="plot" x2="1" y2="1"><stop stop-color="#102d43"/><stop offset="1" stop-color="#101c30"/></linearGradient>
+    <style>
+      text{font-family:Inter,Arial,sans-serif;fill:#d9e5ef}.muted{fill:#8da1b4}.tiny{font-size:12px}.small{font-size:14px}.label{font-size:16px;font-weight:600}.title{font-size:23px;font-weight:650}.card{fill:#142334;stroke:#2b4054;stroke-width:1}.grid{stroke:#273b4e;stroke-width:1}.line{fill:none;stroke:#69cee1;stroke-width:3}.line2{fill:none;stroke:#f2b963;stroke-width:2;stroke-dasharray:6 6}
+    </style>
+  </defs>
+  <rect width="1440" height="960" fill="url(#bg)"/>
+  <rect width="1440" height="74" fill="#101d2b" stroke="#2b4054"/>
+  <circle cx="34" cy="37" r="7" fill="#64cde0"/><text x="54" y="34" class="label">SPECTRA</text><text x="54" y="53" class="tiny muted">MISSION CONTROL</text>
+  <text x="302" y="43" class="small">Operations workspaces</text>
+  <rect x="1114" y="20" width="168" height="34" rx="17" fill="#332c20" stroke="#80633b"/><circle cx="1132" cy="37" r="5" fill="#e5b55f"/><text x="1145" y="42" class="small" fill="#f4d28f">READ-ONLY MODE</text>
+  <text x="1307" y="43" class="small muted">Return to sky view  →</text>
+  <rect x="0" y="74" width="260" height="886" fill="#0e1926" stroke="#263a4c"/>
+  <text x="24" y="117" class="tiny muted">WORKSPACES</text>
+  <rect x="12" y="137" width="236" height="64" rx="8" fill="#153247" stroke="#3a7890"/><text x="30" y="164" class="label">Training Dynamics</text><text x="30" y="185" class="tiny muted">Loss history and training telemetry</text>
+  <text x="30" y="237" class="label">Activations &amp; Parameters</text><text x="30" y="258" class="tiny muted">Inspect internal model behavior</text>
+  <text x="30" y="310" class="label">Decision Boundaries</text><text x="30" y="331" class="tiny muted">Compare classification regions</text>
+  <text x="30" y="383" class="label">Disagreement Triage</text><text x="30" y="404" class="tiny muted">Review hard negatives and escalations</text>
+  <text x="30" y="456" class="label">Data Products &amp; Calibration</text><text x="30" y="477" class="tiny muted">Exports, calibration, product status</text>
+  <line x1="16" y1="510" x2="244" y2="510" class="grid"/><text x="24" y="545" class="tiny muted">STATUS LABELS MUST COME FROM LIVE RESPONSES</text>
+  <text x="24" y="568" class="tiny muted">Sample, stale, unavailable, and live data</text><text x="24" y="587" class="tiny muted">must never share the same visual treatment.</text>
+  <text x="296" y="127" class="tiny muted">MISSION CONTROL  /  TRAINING DYNAMICS</text><text x="296" y="166" class="title">Training Dynamics</text><text x="296" y="193" class="small muted">Inspect model training history and telemetry.</text>
+  <rect x="296" y="218" width="1110" height="58" rx="8" fill="#332c20" stroke="#80633b"/><text x="318" y="244" class="label" fill="#f4d28f">Read-only demo mode</text><text x="318" y="263" class="small muted">Changes are disabled. Server authorization remains required even when mutations are enabled.</text>
+  <rect x="296" y="302" width="1110" height="518" rx="10" class="card"/><text x="322" y="341" class="label">Training history</text><text x="322" y="364" class="small muted">Chart content and freshness label are supplied by the current data source.</text>
+  <rect x="1222" y="322" width="158" height="30" rx="6" fill="#1b2c3d" stroke="#3a5065"/><text x="1240" y="342" class="small muted">Time range ▾</text>
+  <line x1="374" y1="410" x2="374" y2="748" class="grid"/><line x1="374" y1="748" x2="1368" y2="748" class="grid"/>
+  <line x1="374" y1="477" x2="1368" y2="477" class="grid"/><line x1="374" y1="544" x2="1368" y2="544" class="grid"/><line x1="374" y1="611" x2="1368" y2="611" class="grid"/><line x1="374" y1="678" x2="1368" y2="678" class="grid"/>
+  <text x="321" y="418" class="tiny muted">Metric</text><text x="322" y="755" class="tiny muted">Time / training step</text>
+  <path d="M400 700 C480 674 520 660 584 630 S690 594 744 600 856 542 916 552 1028 496 1092 510 1200 442 1262 464 1320 430 1360 440" class="line"/>
+  <path d="M400 688 C480 642 520 674 584 600 S690 620 744 570 856 590 916 520 1028 535 1092 476 1200 510 1262 430 1320 470 1360 410" class="line2"/>
+  <rect x="322" y="778" width="12" height="4" rx="2" fill="#69cee1"/><text x="342" y="785" class="tiny muted">Series and units from source</text><rect x="550" y="778" width="12" height="4" rx="2" fill="#f2b963"/><text x="570" y="785" class="tiny muted">Optional comparison series</text>
+  <rect x="296" y="842" width="1110" height="78" rx="8" class="card"/><text x="320" y="874" class="small muted">Data source / freshness</text><text x="320" y="898" class="small">Show the actual endpoint or product, last successful update, and any stale/unavailable state here.</text>
+  <text x="1108" y="943" class="tiny muted">LAYOUT MOCK · NO LIVE METRICS OR OPERATIONAL VALUES</text>
+</svg>

@@ -219,17 +219,26 @@ export const SpectrophotometricLab: React.FC = () => {
     setActiveSpectrum, setSpectrumLoading,
   } = useTelemetryStore();
   const { setZ } = useSpectraUrlState();
+  const [spectrumFetchState, setSpectrumFetchState] = useState<'loading' | 'live' | 'preview'>('loading');
+  const [spectrumSourceBadge, setSpectrumSourceBadge] = useState('[Synthetic Injection Mode]');
 
   // Live 102-Channel WCS-WAVE Hyperspectral Fetch (SPECIFICATION.md §4.1 Pipeline 2, §5.3.1)
   useEffect(() => {
     let cancelled = false;
     const fetchLiveSpectrum = async () => {
       setSpectrumLoading(true);
+      setSpectrumFetchState('loading');
+      setSpectrumSourceBadge('[Synthetic Injection Mode]');
+      setActiveSpectrum([]);
       try {
         const res = await fetch(`/api/spectrum?ra=${ra}&dec=${dec}&normalize=false`);
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (!cancelled && Array.isArray(data.wavelengths_um) && Array.isArray(data.flux_jy)) {
+        if (cancelled) return;
+        if (!Array.isArray(data.wavelengths_um) || !Array.isArray(data.flux_jy) || data.wavelengths_um.length < 102 || data.flux_jy.length < 102) {
+          throw new Error('Spectrum response did not contain 102 channels');
+        }
+        if (!cancelled) {
           const convFactor = 9.035103099229226e-4; // Jy per (MJy/sr) for 6.2" pixel
           const channels: SpectralChannel[] = data.wavelengths_um.map((lam: number, i: number) => ({
             channel: i + 1,
@@ -240,9 +249,14 @@ export const SpectrophotometricLab: React.FC = () => {
             flag: data.flags?.[i] ?? 0,
           }));
           setActiveSpectrum(channels);
+          setSpectrumSourceBadge(data.provenance?.source_badge || '[Source not supplied]');
+          setSpectrumFetchState('live');
         }
       } catch {
-        // Graceful fallback to synthetic model when offline
+        if (!cancelled) {
+          setSpectrumSourceBadge('[Synthetic Injection Mode]');
+          setSpectrumFetchState('preview');
+        }
       } finally {
         if (!cancelled) setSpectrumLoading(false);
       }
@@ -506,11 +520,13 @@ export const SpectrophotometricLab: React.FC = () => {
   }, [isRDraconis, colorByMjd, perChannelMjd]);
 
   return (
-    <div className="flex h-full min-h-[720px] bg-neutral-950 text-neutral-100">
-      <div className="flex min-w-0 flex-1 flex-col border-r border-neutral-800">
+    <div className="flex h-full min-h-[720px] w-full flex-col overflow-y-auto bg-neutral-950 text-neutral-100 lg:min-h-0 lg:flex-row lg:overflow-hidden">
+      <div className="flex min-h-[70vh] min-w-0 w-full flex-1 flex-col border-b border-neutral-800 lg:h-full lg:min-h-0 lg:border-b-0 lg:border-r">
         <div className="border-b border-neutral-800 px-4 py-3">
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-sm font-semibold tracking-wide text-white">Tab 3 — Spectrophotometric Lab</h2>
+            <span className={`rounded border px-2 py-0.5 font-mono text-[10px] ${spectrumSourceBadge.includes('Synthetic') ? 'border-amber-500/40 bg-amber-950/30 text-amber-300' : 'border-sky-500/40 bg-sky-950/30 text-sky-300'}`} aria-live="polite">{spectrumSourceBadge}</span>
+            {spectrumFetchState === 'loading' && <span className="text-[10px] text-neutral-500">Refreshing archive spectrum… preview shown until loaded</span>}
             <span className="rounded bg-neutral-800 px-2 py-0.5 font-mono text-[10px] text-neutral-300">102 channels · 0.75–5.00 µm · λ vs Fν (MJy/sr)</span>
             <span className="rounded bg-sky-950/60 px-2 py-0.5 font-mono text-[10px] text-sky-300">probe px ({probedPixel?.x ?? 16},{probedPixel?.y ?? 16})</span>
             {isSpectralBlinkSynced && <span className="rounded bg-emerald-950/60 px-2 py-0.5 text-[10px] text-emerald-300">Spectral blink synced (epoch {epochIndex})</span>}
@@ -564,8 +580,10 @@ export const SpectrophotometricLab: React.FC = () => {
         </div>
 
         {/* Photo-z / χ²(z) + P(z) */}
-        <div className="border-t border-neutral-800 p-4">
-          <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-300">Automated Galaxy Photo-z Solver (Planck 2018: H0=67.4, Ωm=0.315, ΩΛ=0.685)</h3>
+        <details className="border-t border-neutral-800">
+          <summary className="flex cursor-pointer items-center justify-between gap-2 px-4 py-3 text-xs font-semibold uppercase tracking-wide text-neutral-300">Redshift &amp; photo-z tools <span aria-hidden="true" className="text-primary">⌄</span></summary>
+          <div className="p-4">
+          <h3 className="mb-2 text-[10px] font-medium text-neutral-500">Automated Galaxy Photo-z Solver · Planck 2018 cosmology</h3>
           <div className="mt-2 grid grid-cols-1 gap-3 lg:grid-cols-2">
             <div className="rounded border border-neutral-800 bg-neutral-900/40 p-3 text-[11px]">
               <div>Best-fit redshift: <span className="font-mono font-semibold text-sky-300">z = {photoZ.bestZ.toFixed(2)}</span> (grid Δz=0.01, z∈[0,2.5])</div>
@@ -600,12 +618,15 @@ export const SpectrophotometricLab: React.FC = () => {
               </div>
             </div>
           </div>
-        </div>
+          </div>
+        </details>
       </div>
 
       {/* Right: NNLS unmixing / controls */}
-      <aside className="w-[360px] shrink-0 overflow-y-auto bg-neutral-900/20 p-4">
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-neutral-300">Two-Component NNLS Spectral Unmixing</h3>
+      <aside className="flex w-full shrink-0 flex-col gap-3 overflow-y-visible bg-neutral-900/20 p-4 lg:h-full lg:w-[360px] lg:overflow-y-auto">
+        <details className="rounded border border-neutral-800 bg-neutral-900/40 p-3">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-neutral-300">Two-component NNLS unmixing <span aria-hidden="true" className="ml-2 text-primary">⌄</span></summary>
+        <div className="mt-2">
         {isEpsInd && unmix ? (
           <div className="mt-2 rounded border border-amber-500/30 bg-amber-950/10 p-3 text-[11px]">
             <div className="mb-2 flex items-center justify-between gap-2">
@@ -637,6 +658,8 @@ export const SpectrophotometricLab: React.FC = () => {
         ) : (
           <p className="mt-2 text-[11px] text-neutral-500">Unmixing panel activates for Epsilon Indi B (Epoch 2025.5: 331.09566°, -56.80031°). Select that benchmark/coordinate to see T1+T6 de-blend, weights a/b, residual χ²_red, and the illustrative badge.</p>
         )}
+        </div>
+        </details>
 
         {/* Spectral Similarity Matches (POST /api/subjects/similar) */}
         <div className="mt-4 rounded border border-neutral-800 bg-neutral-900/40 p-3 text-[11px]">
@@ -670,10 +693,10 @@ export const SpectrophotometricLab: React.FC = () => {
           </div>
         </div>
 
-        <div className="mt-4 rounded border border-neutral-800 bg-neutral-950/40 p-3 text-[11px] text-neutral-400">
-          <div className="font-semibold text-neutral-300">Pixel → Spectrum link (Tab 2 contract)</div>
-          <div className="mt-1">Reads <span className="font-mono">useTelemetryStore.probedPixel</span> / <span className="font-mono">activeSpectrum</span> (set by Tab 2 on pixel click). When no 102-ch spectrum is loaded, generates a deterministic 102-channel preview for the current target, pixel, and epoch.</div>
-        </div>
+        <details className="rounded border border-neutral-800 bg-neutral-950/40 p-3 text-[11px] text-neutral-400">
+          <summary className="cursor-pointer font-semibold text-neutral-300">Pixel → Spectrum link (Tab 2 contract) <span aria-hidden="true" className="ml-1 text-primary">⌄</span></summary>
+          <p className="mt-2">Reads <span className="font-mono">useTelemetryStore.probedPixel</span> / <span className="font-mono">activeSpectrum</span> (set by Tab 2 on pixel click). When no 102-channel spectrum is loaded, the current target, pixel, and epoch use a deterministic preview with the synthetic source badge above.</p>
+        </details>
       </aside>
     </div>
   );

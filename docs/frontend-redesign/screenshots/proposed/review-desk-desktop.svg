@@ -1,0 +1,191 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1000" viewBox="0 0 1600 1000" role="img" aria-labelledby="title description">
+  <title id="title">Proposed Spectra Review Desk mock</title>
+  <desc id="description">A dark astronomy review workspace with a case queue, two illustrative observation frames, structured assessment choices, and a case discussion link. All displayed content is illustrative and not archive data.</desc>
+  <defs>
+    <linearGradient id="space" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#111a2c"/>
+      <stop offset="1" stop-color="#080d17"/>
+    </linearGradient>
+    <radialGradient id="nebula">
+      <stop offset="0" stop-color="#8d64dc" stop-opacity=".46"/>
+      <stop offset=".55" stop-color="#315c93" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#080d17" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .ui { font-family: Inter, ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; }
+      .title { fill: #f1f5fc; font-size: 21px; font-weight: 650; }
+      .label { fill: #cad5e8; font-size: 14px; font-weight: 600; }
+      .body { fill: #aebbd0; font-size: 13px; }
+      .small { fill: #8997ae; font-size: 11px; }
+      .micro { fill: #91a0b8; font-size: 10px; letter-spacing: .04em; }
+      .mono { fill: #b6c7df; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1000" fill="#080d17"/>
+  <g class="ui">
+    <rect x="0" y="0" width="1600" height="66" fill="#0d1421"/>
+    <path d="M0 65.5H1600" stroke="#263246"/>
+    <circle cx="34" cy="33" r="13" fill="#90d6ff" fill-opacity=".14" stroke="#74c9f4"/>
+    <path d="M28 36c5-12 12-12 12 0M31 41c2-5 6-5 8 0" fill="none" stroke="#b8e8ff" stroke-width="1.5"/>
+    <text x="57" y="39" class="title" font-size="18">SPECTRA</text>
+    <text x="193" y="39" class="body">Explore</text>
+    <text x="267" y="39" class="body">Discover</text>
+    <text x="354" y="39" class="body">Science</text>
+    <rect x="429" y="17" width="78" height="33" rx="8" fill="#152236" stroke="#5a8fc6"/>
+    <text x="448" y="38" fill="#dff2ff" font-size="13" font-weight="650">Review</text>
+    <rect x="585" y="16" width="510" height="34" rx="8" fill="#101a2a" stroke="#28364b"/>
+    <circle cx="605" cy="32" r="6" fill="none" stroke="#8191a9" stroke-width="1.5"/>
+    <path d="m610 37 5 5" stroke="#8191a9" stroke-width="1.5"/>
+    <text x="625" y="37" class="small">Search targets, coordinates, and cases</text>
+    <rect x="1108" y="17" width="91" height="33" rx="7" fill="#101a2a" stroke="#28364b"/>
+    <text x="1122" y="38" class="small">Targets ▾</text>
+    <rect x="1207" y="17" width="91" height="33" rx="7" fill="#101a2a" stroke="#28364b"/>
+    <text x="1218" y="38" class="small">FoV 180″</text>
+    <rect x="1306" y="17" width="67" height="33" rx="7" fill="#101a2a" stroke="#28364b"/>
+    <text x="1320" y="38" class="small">Share</text>
+    <text x="1392" y="38" class="small">Observer · Obs-7F3A</text>
+
+    <rect x="24" y="84" width="1552" height="42" rx="8" fill="#111c2c" stroke="#46516a"/>
+    <circle cx="45" cy="105" r="6" fill="#e9b66d"/>
+    <text x="61" y="110" fill="#ffdfaa" font-size="12" font-weight="700" letter-spacing=".04em">ILLUSTRATIVE MOCK — NOT ARCHIVE DATA</text>
+    <text x="1292" y="110" class="small">Community Product · Layout proposal</text>
+
+    <!-- Case queue -->
+    <rect x="24" y="142" width="270" height="834" rx="10" fill="#0e1623" stroke="#263246"/>
+    <text x="44" y="177" class="title" font-size="15">Review queue</text>
+    <rect x="187" y="153" width="89" height="27" rx="6" fill="#17324b" stroke="#3f7394"/>
+    <text x="198" y="171" fill="#d8f1ff" font-size="11" font-weight="650">+ New case</text>
+    <text x="44" y="199" class="small">Select a case to inspect its evidence</text>
+    <rect x="42" y="216" width="234" height="34" rx="7" fill="#0a111c" stroke="#29364a"/>
+    <circle cx="59" cy="232" r="5" fill="none" stroke="#8191a9"/>
+    <path d="m63 236 4 4" stroke="#8191a9"/>
+    <text x="77" y="237" class="small">Filter cases</text>
+    <rect x="42" y="264" width="234" height="34" rx="7" fill="#152237" stroke="#304661"/>
+    <text x="57" y="286" fill="#e4edf9" font-size="12" font-weight="600">Browse all</text>
+    <text x="168" y="286" class="small">Current target</text>
+    <path d="M41 313H277" stroke="#253246"/>
+
+    <rect x="36" y="326" width="246" height="120" rx="8" fill="#17263a" stroke="#6d9fce"/>
+    <rect x="49" y="340" width="73" height="19" rx="5" fill="#29374a"/>
+    <text x="58" y="353" class="micro">EXAMPLE CASE</text>
+    <text x="49" y="381" fill="#eef5ff" font-size="13" font-weight="650">WISE 0855-0714</text>
+    <text x="49" y="401" class="small">133.73712°, −7.24038°</text>
+    <text x="49" y="425" class="small">Matched-band motion review</text>
+    <circle cx="263" cy="342" r="4" fill="#7bd4b2"/>
+
+    <rect x="42" y="462" width="234" height="100" rx="8" fill="#101a29" stroke="#253246"/>
+    <rect x="54" y="476" width="73" height="19" rx="5" fill="#29374a"/>
+    <text x="63" y="489" class="micro">EXAMPLE CASE</text>
+    <text x="54" y="517" class="label" font-size="13">RW Aurigae</text>
+    <text x="54" y="541" class="small">Variable-source assessment</text>
+
+    <rect x="42" y="576" width="234" height="100" rx="8" fill="#101a29" stroke="#253246"/>
+    <rect x="54" y="590" width="73" height="19" rx="5" fill="#29374a"/>
+    <text x="63" y="603" class="micro">EXAMPLE CASE</text>
+    <text x="54" y="631" class="label" font-size="13">Orion field</text>
+    <text x="54" y="655" class="small">Spectral-feature assessment</text>
+
+    <rect x="42" y="899" width="234" height="55" rx="8" fill="#101a29" stroke="#253246"/>
+    <text x="55" y="922" class="small">Counts and case states appear</text>
+    <text x="55" y="940" class="small">only when returned by the service.</text>
+
+    <!-- Evidence workspace -->
+    <text x="316" y="168" class="title">WISE 0855-0714</text>
+    <rect x="507" y="146" width="123" height="24" rx="12" fill="#14243a" stroke="#34506e"/>
+    <text x="524" y="162" fill="#c5d7ef" font-size="10" font-weight="650">COMMUNITY CASE</text>
+    <text x="316" y="194" class="mono">RA 133.73712°  ·  Dec −7.24038°  ·  FOV 120″</text>
+    <rect x="1027" y="145" width="177" height="28" rx="7" fill="#14253b" stroke="#385a80"/>
+    <text x="1045" y="164" fill="#cdeaff" font-size="12" font-weight="600">Open in TimeLens ↗</text>
+
+    <rect x="316" y="211" width="888" height="54" rx="8" fill="#111c2b" stroke="#2b3a50"/>
+    <circle cx="338" cy="238" r="5" fill="#91d8ff"/>
+    <text x="353" y="235" class="label">Review the source across available epochs</text>
+    <text x="353" y="253" class="small">Example task copy · community classifications are not confirmation</text>
+    <rect x="1015" y="225" width="170" height="27" rx="6" fill="#172943" stroke="#355c80"/>
+    <text x="1033" y="243" fill="#cdeaff" font-size="11" font-weight="600">Discuss this case</text>
+
+    <rect x="316" y="280" width="888" height="488" rx="10" fill="#0e1622" stroke="#29364a"/>
+    <text x="338" y="310" class="label">Observation comparison</text>
+    <text x="968" y="309" class="small">Illustrative frame art</text>
+    <rect x="337" y="326" width="414" height="318" rx="7" fill="url(#space)" stroke="#35445b"/>
+    <rect x="764" y="326" width="418" height="318" rx="7" fill="url(#space)" stroke="#35445b"/>
+    <ellipse cx="550" cy="479" rx="190" ry="150" fill="url(#nebula)"/>
+    <ellipse cx="976" cy="489" rx="210" ry="160" fill="url(#nebula)"/>
+    <g fill="#d7e8ff">
+      <circle cx="391" cy="365" r="1.5"/><circle cx="454" cy="422" r="1.2"/><circle cx="699" cy="388" r="1.4"/>
+      <circle cx="682" cy="587" r="1.1"/><circle cx="418" cy="591" r="1.3"/><circle cx="623" cy="354" r="1.1"/>
+      <circle cx="806" cy="374" r="1.3"/><circle cx="1142" cy="409" r="1.1"/><circle cx="1107" cy="585" r="1.5"/>
+      <circle cx="845" cy="577" r="1.1"/><circle cx="1028" cy="359" r="1.4"/><circle cx="1160" cy="541" r="1.1"/>
+    </g>
+    <g fill="#9eb9df" opacity=".8">
+      <circle cx="490" cy="527" r="2"/><circle cx="596" cy="437" r="1.8"/><circle cx="648" cy="531" r="1.6"/>
+      <circle cx="885" cy="511" r="1.8"/><circle cx="1064" cy="438" r="1.8"/><circle cx="1131" cy="519" r="1.6"/>
+    </g>
+    <circle cx="542" cy="469" r="9" fill="#f4cf88" fill-opacity=".27"/>
+    <circle cx="542" cy="469" r="3.2" fill="#fff0c4"/>
+    <circle cx="976" cy="469" r="9" fill="#f4cf88" fill-opacity=".27"/>
+    <circle cx="976" cy="469" r="3.2" fill="#fff0c4"/>
+    <path d="M532 469h20M542 459v20M966 469h20M976 459v20" stroke="#cceaff" stroke-opacity=".8"/>
+    <rect x="351" y="341" width="133" height="24" rx="5" fill="#0b1320" fill-opacity=".88"/>
+    <text x="362" y="357" fill="#e2ecfb" font-size="11" font-weight="600">Epoch 1 · example</text>
+    <rect x="778" y="341" width="133" height="24" rx="5" fill="#0b1320" fill-opacity=".88"/>
+    <text x="789" y="357" fill="#e2ecfb" font-size="11" font-weight="600">Epoch 2 · example</text>
+    <text x="351" y="628" fill="#d2deef" font-size="11">Band D5 · 4.12 µm · illustrative placeholder</text>
+    <text x="778" y="628" fill="#d2deef" font-size="11">Band D5 · 4.12 µm · illustrative placeholder</text>
+    <rect x="338" y="659" width="133" height="32" rx="7" fill="#193253" stroke="#4274a5"/>
+    <text x="375" y="680" fill="#e1f3ff" font-size="12" font-weight="650">Blink</text>
+    <rect x="480" y="659" width="133" height="32" rx="7" fill="#111b2a" stroke="#2d3b50"/>
+    <text x="501" y="680" class="body">Side by side</text>
+    <rect x="622" y="659" width="133" height="32" rx="7" fill="#111b2a" stroke="#2d3b50"/>
+    <text x="660" y="680" class="body">Difference</text>
+    <text x="786" y="680" class="small">Same-band compatibility required</text>
+    <rect x="338" y="710" width="844" height="40" rx="7" fill="#101a28" stroke="#28384d"/>
+    <text x="355" y="735" class="small">Source and quality details appear here only when returned with the observation.</text>
+
+    <rect x="316" y="784" width="888" height="164" rx="10" fill="#0e1622" stroke="#29364a"/>
+    <text x="338" y="815" class="label">Case discussion</text>
+    <text x="338" y="840" class="body">A focused place to compare evidence and ask questions about this case.</text>
+    <text x="338" y="872" class="small">Original post and replies stay attached to the selected candidate.</text>
+    <text x="338" y="906" fill="#9edaff" font-size="12" font-weight="600">Open case discussion →</text>
+    <rect x="1032" y="851" width="146" height="48" rx="8" fill="#14253b" stroke="#385a80"/>
+    <text x="1054" y="880" fill="#cdeaff" font-size="12" font-weight="600">View discussion</text>
+
+    <!-- Assessment panel -->
+    <rect x="1220" y="142" width="356" height="834" rx="10" fill="#0e1623" stroke="#263246"/>
+    <text x="1242" y="177" class="title" font-size="17">Your assessment</text>
+    <text x="1242" y="201" class="body">What best describes the source?</text>
+    <text x="1242" y="220" class="small">Example choices · not a saved response</text>
+
+    <rect x="1240" y="242" width="316" height="56" rx="8" fill="#152237" stroke="#50769c"/>
+    <circle cx="1263" cy="270" r="9" fill="none" stroke="#8eb8df" stroke-width="1.5"/>
+    <circle cx="1263" cy="270" r="3.5" fill="#8eb8df"/>
+    <text x="1283" y="275" class="label">Moving source</text>
+    <rect x="1240" y="309" width="316" height="56" rx="8" fill="#101a29" stroke="#29364a"/>
+    <circle cx="1263" cy="337" r="9" fill="none" stroke="#72839a" stroke-width="1.5"/>
+    <text x="1283" y="342" class="label">Variable source</text>
+    <rect x="1240" y="376" width="316" height="56" rx="8" fill="#101a29" stroke="#29364a"/>
+    <circle cx="1263" cy="404" r="9" fill="none" stroke="#72839a" stroke-width="1.5"/>
+    <text x="1283" y="409" class="label">Ice / spectral feature</text>
+    <rect x="1240" y="443" width="316" height="56" rx="8" fill="#101a29" stroke="#29364a"/>
+    <circle cx="1263" cy="471" r="9" fill="none" stroke="#72839a" stroke-width="1.5"/>
+    <text x="1283" y="476" class="label">Blend or artifact</text>
+    <rect x="1240" y="510" width="316" height="56" rx="8" fill="#101a29" stroke="#29364a"/>
+    <circle cx="1263" cy="538" r="9" fill="none" stroke="#72839a" stroke-width="1.5"/>
+    <text x="1283" y="543" class="label">Not sure yet</text>
+
+    <text x="1242" y="610" class="small">This is a community assessment, not a</text>
+    <text x="1242" y="627" class="small">confirmed discovery. Evidence may be uncertain.</text>
+    <rect x="1240" y="651" width="316" height="44" rx="8" fill="#4c9dc5"/>
+    <text x="1336" y="679" fill="#061522" font-size="13" font-weight="700">Submit assessment</text>
+    <text x="1242" y="728" fill="#a4dfff" font-size="12" font-weight="600">How to review this case ↗</text>
+    <path d="M1242 755H1554" stroke="#263448"/>
+    <text x="1242" y="786" class="label">Review signals</text>
+    <text x="1242" y="811" class="small">Show vote totals and sample size only when</text>
+    <text x="1242" y="828" class="small">the server returns them for this case.</text>
+    <rect x="1240" y="858" width="316" height="78" rx="8" fill="#111c2b" stroke="#2b3a50"/>
+    <circle cx="1262" cy="882" r="5" fill="#7bd4b2"/>
+    <text x="1277" y="886" class="small">Live updates use the discussion stream.</text>
+    <text x="1254" y="914" class="small">Reconnect status should not interrupt review.</text>
+  </g>
+</svg>

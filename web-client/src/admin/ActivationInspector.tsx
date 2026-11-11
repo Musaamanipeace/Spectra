@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { useAdminTelemetry, PROBE_TARGETS, ADMIN_LAYERS, AdminLayerName } from './hooks/useAdminTelemetry';
+import { useAdminTelemetry, ADMIN_LAYERS, AdminLayerName } from './hooks/useAdminTelemetryLive';
+import { AdminDataState } from './AdminDataState';
 import { Button, Badge, Select } from '../components/ui';
 import { cn } from '../lib/utils';
 
@@ -20,10 +21,10 @@ export const ActivationInspector: React.FC = () => {
     totalEpochs,
     currentFrame,
     frames,
+    isLoading,
+    loadError,
     selectedLayer,
     setSelectedLayer,
-    selectedProbeTarget,
-    setSelectedProbeTarget,
     scrubToEpoch,
   } = useAdminTelemetry();
 
@@ -33,18 +34,10 @@ export const ActivationInspector: React.FC = () => {
   const [activeChannel, setActiveChannel] = useState<number>(0);
 
   // Selected layer statistics from current active epoch
-  const layerStats = useMemo(() => {
-    if (!currentFrame || !currentFrame.histograms[selectedLayer]) {
-      return {
-        counts: new Array(40).fill(10),
-        mean: 0.012,
-        std: 0.142,
-        grad_norm: 0.0084,
-        dead_neuron_pct: 0.8,
-      };
-    }
-    return currentFrame.histograms[selectedLayer];
-  }, [currentFrame, selectedLayer]);
+  const layerStats = useMemo(
+    () => currentFrame?.histograms[selectedLayer],
+    [currentFrame, selectedLayer]
+  );
 
   // Render 3D Ridgeline Histograms
   useEffect(() => {
@@ -191,26 +184,11 @@ export const ActivationInspector: React.FC = () => {
     const gradCam = currentFrame.grad_cam;
     const pixelSize = size / 32;
 
-    // Draw background astrophysical cutout simulation
+    // Render only the returned saliency values; the telemetry contract has no cutout pixels.
+    ctx.fillStyle = '#101722';
+    ctx.fillRect(0, 0, size, size);
     for (let y = 0; y < 32; y++) {
       for (let x = 0; x < 32; x++) {
-        // Astronomical background noise + moving dipole in center
-        const dx = x - 16;
-        const dy = y - 16;
-        const dist = Math.sqrt(dx * dx + dy * dy);
-        
-        // Base flux mid-grey
-        let baseFlux = 0.12 + Math.random() * 0.04;
-        // Central dipole (positive right, negative left)
-        if (dist < 6) {
-          baseFlux += (dx / 6) * 0.45;
-        }
-
-        const fluxByte = Math.max(0, Math.min(255, Math.round(baseFlux * 255)));
-        ctx.fillStyle = `rgb(${fluxByte}, ${fluxByte}, ${fluxByte})`;
-        ctx.fillRect(x * pixelSize, y * pixelSize, pixelSize + 0.5, pixelSize + 0.5);
-
-        // Grad-CAM heatmap blend (Jet colormap)
         const sal = gradCam[y]?.[x] || 0;
         if (sal > 0.05) {
           // Jet colormap RGB interpolation
@@ -259,30 +237,17 @@ export const ActivationInspector: React.FC = () => {
     return currentFrame.probe_activations[selectedLayer]; // 4 channels of 16x16
   }, [currentFrame, selectedLayer]);
 
+  if (isLoading || !currentFrame || !layerStats || !featureMaps) {
+    return <AdminDataState title={loadError ? 'Activation telemetry unavailable' : 'No persisted activation data'} detail={loadError ?? 'Layer histograms and probe activations appear here only when supplied by a real model run.'} loading={isLoading} />;
+  }
+
   return (
     <div className="flex flex-col h-full bg-background text-foreground p-4 gap-4 overflow-y-auto">
-      {/* PINNED PROBE TARGET CONTROLLER */}
+      {/* PERSISTED PROBE CONTEXT */}
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-sm border border-border bg-card p-3 shadow-sm">
-        <div className="flex items-center gap-3">
-          <span className="text-xs font-semibold text-foreground">
-            Pinned probe target:
-          </span>
-          <Select
-            sizeVariant="sm"
-            value={selectedProbeTarget}
-            onChange={(e) => setSelectedProbeTarget(e.target.value)}
-            className="min-w-[320px]"
-          >
-            {PROBE_TARGETS.map((t) => (
-              <option key={t.name} value={t.name}>
-                {t.name} — {t.type} (RA {t.ra.toFixed(4)}°, Dec {t.dec.toFixed(4)}°)
-              </option>
-            ))}
-          </Select>
-        </div>
+        <p className="text-xs text-muted-foreground">Probe target metadata was not included in this telemetry response.</p>
         <div className="flex items-center gap-2 text-xs text-muted-foreground">
-          <span className="h-2 w-2 rounded-full bg-emerald-400" />
-          <span>Diagnostic probe evaluated every epoch</span>
+          <span>Stored model run</span>
           <Badge variant="sky" className="font-mono text-[10px]">
             Epoch {activeEpoch} / {totalEpochs}
           </Badge>
@@ -364,7 +329,7 @@ export const ActivationInspector: React.FC = () => {
               Forward activations & Grad-CAM saliency
             </span>
             <Badge variant="outline" className="text-[10px] font-mono">
-              WISE 0855 (Moving dipole)
+              Stored probe data
             </Badge>
           </div>
 

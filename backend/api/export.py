@@ -35,261 +35,111 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/api/admin/export", tags=["Mission Data Products"])
 
+
+def _db_pool_functions():
+    try:
+        from backend.db.pool import close_pool, create_pool
+    except ImportError:
+        from db.pool import close_pool, create_pool  # type: ignore
+    return create_pool, close_pool
+
+
+async def _load_product_records(product: str, limit: int = 1000) -> list[dict[str, Any]]:
+    queries = {
+        "candidates": """
+            SELECT subject_id, title, ra, dec, ai_predicted_class, consensus_class,
+                   consensus_score, shannon_entropy, verification_status, data_release
+            FROM subjects
+            WHERE is_calibration = FALSE AND classification_count > 0
+              AND consensus_class IS NOT NULL
+              AND verification_status IN ('community_candidate', 'verified_discovery')
+            ORDER BY created_at DESC LIMIT $1
+        """,
+        "ices": """
+            SELECT subject_id, title AS target_star, ra, dec, ice_column_densities,
+                   verification_status, data_release
+            FROM subjects
+            WHERE is_calibration = FALSE AND classification_count > 0
+              AND ice_column_densities <> '{}'::jsonb
+            ORDER BY created_at DESC LIMIT $1
+        """,
+        "variability": """
+            SELECT subject_id, title, ra, dec, category AS variability_type,
+                   consensus_class, consensus_score, verification_status, data_release
+            FROM subjects
+            WHERE is_calibration = FALSE AND classification_count > 0
+              AND category ILIKE '%variab%'
+            ORDER BY created_at DESC LIMIT $1
+        """,
+        "artifacts": """
+            SELECT subject_id, title, ra, dec, category AS artifact_class,
+                   ai_predicted_class, ai_probabilities, ai_explanation,
+                   verification_status, data_release
+            FROM subjects
+            WHERE is_calibration = FALSE AND classification_count > 0
+              AND (category ILIKE '%artifact%' OR ai_predicted_class ILIKE '%artifact%')
+            ORDER BY created_at DESC LIMIT $1
+        """,
+    }
+    if product == "ml-dataset":
+        raise HTTPException(status_code=501, detail="A calibrated multi-epoch tensor product is not available")
+    query = queries.get(product)
+    if query is None:
+        raise HTTPException(status_code=400, detail=f"Unknown data product '{product}'")
+
+    create_pool, close_pool = _db_pool_functions()
+    pool = None
+    try:
+        pool = await create_pool(min_size=1, max_size=2)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(query, limit)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Community product records are unavailable") from exc
+    finally:
+        await close_pool(pool)
+    return [dict(row) for row in rows]
+
+
+async def _get_product_counts() -> dict[str, dict[str, int]]:
+    products = ("candidates", "ices", "variability", "artifacts")
+    create_pool, close_pool = _db_pool_functions()
+    pool = None
+    try:
+        pool = await create_pool(min_size=1, max_size=2)
+        async with pool.acquire() as conn:
+            results = {}
+            for product in products:
+                row = await conn.fetchrow(
+                    """
+                    SELECT COUNT(*)::int AS count,
+                           COUNT(*) FILTER (WHERE verification_status = 'verified_discovery')::int AS verified_count
+                    FROM subjects
+                    WHERE CASE $1
+                        WHEN 'candidates' THEN is_calibration = FALSE AND classification_count > 0
+                            AND consensus_class IS NOT NULL
+                            AND verification_status IN ('community_candidate', 'verified_discovery')
+                        WHEN 'ices' THEN is_calibration = FALSE AND classification_count > 0
+                            AND ice_column_densities <> '{}'::jsonb
+                        WHEN 'variability' THEN is_calibration = FALSE AND classification_count > 0
+                            AND category ILIKE '%variab%'
+                        WHEN 'artifacts' THEN is_calibration = FALSE AND classification_count > 0
+                            AND (category ILIKE '%artifact%' OR ai_predicted_class ILIKE '%artifact%')
+                        ELSE FALSE
+                    END
+                    """,
+                    product,
+                )
+                results[product] = dict(row)
+            return results
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=503, detail="Community product summaries are unavailable") from exc
+    finally:
+        await close_pool(pool)
+
 DISCLAIMER_TEXT = (
     "Community Product: Generated via citizen science consensus on NASA/IPAC SPHEREx QR2 "
     "public data. Not an official NASA or JPL publication."
 )
-
-# Standard Canonical Benchmark & Community Candidate Seeds
-COMMUNITY_CANDIDATE_RECORDS: list[dict[str, Any]] = [
-    {
-        "subject_id": "benchmark_barnard",
-        "title": "Barnard's Star",
-        "ra": 269.44639,
-        "dec": 4.76676,
-        "pm_ra_mas_yr": -802.8,
-        "pm_dec_mas_yr": 10362.5,
-        "total_pm_arcsec_yr": 10.393,
-        "primary_class": "moving_brown_dwarf",
-        "spectral_type": "M4V Red Dwarf",
-        "confidence": 0.98,
-        "consensus_class": "high_proper_motion_star",
-        "consensus_score": 0.95,
-        "shannon_entropy": 0.15,
-        "verification_status": "verified_discovery",
-        "release": "spherex_qr2",
-        "source_badge": "NASA Benchmark",
-    },
-    {
-        "subject_id": "benchmark_wise_0855",
-        "title": "WISE 0855-0714",
-        "ra": 133.73712,
-        "dec": -7.24038,
-        "pm_ra_mas_yr": -8150.0,
-        "pm_dec_mas_yr": 650.0,
-        "total_pm_arcsec_yr": 8.176,
-        "primary_class": "moving_brown_dwarf",
-        "spectral_type": "Y4 Sub-Brown Dwarf",
-        "confidence": 0.94,
-        "consensus_class": "moving_brown_dwarf",
-        "consensus_score": 0.91,
-        "shannon_entropy": 0.28,
-        "verification_status": "verified_discovery",
-        "release": "spherex_qr2",
-        "source_badge": "NASA Benchmark",
-    },
-    {
-        "subject_id": "benchmark_eps_indi_b",
-        "title": "Epsilon Indi B",
-        "ra": 331.09566,
-        "dec": -56.80031,
-        "pm_ra_mas_yr": 3961.0,
-        "pm_dec_mas_yr": -2538.0,
-        "total_pm_arcsec_yr": 4.705,
-        "primary_class": "moving_brown_dwarf",
-        "spectral_type": "T1+T6 Binary",
-        "confidence": 0.92,
-        "consensus_class": "moving_brown_dwarf",
-        "consensus_score": 0.89,
-        "shannon_entropy": 0.35,
-        "verification_status": "verified_discovery",
-        "release": "spherex_qr2",
-        "source_badge": "NASA Benchmark",
-    },
-    {
-        "subject_id": "benchmark_rw_aur",
-        "title": "RW Aurigae",
-        "ra": 76.95647,
-        "dec": 30.40130,
-        "pm_ra_mas_yr": 1.2,
-        "pm_dec_mas_yr": -19.4,
-        "total_pm_arcsec_yr": 0.019,
-        "primary_class": "variable_star",
-        "spectral_type": "T Tauri Young Stellar Object",
-        "confidence": 0.96,
-        "consensus_class": "variable_star",
-        "consensus_score": 0.94,
-        "shannon_entropy": 0.21,
-        "verification_status": "verified_discovery",
-        "release": "spherex_qr2",
-        "source_badge": "NASA Benchmark",
-    },
-    {
-        "subject_id": "benchmark_r_dra",
-        "title": "R Draconis",
-        "ra": 248.16773,
-        "dec": 66.75504,
-        "pm_ra_mas_yr": 9.8,
-        "pm_dec_mas_yr": -14.6,
-        "total_pm_arcsec_yr": 0.018,
-        "primary_class": "variable_star",
-        "spectral_type": "Mira Variable AGB",
-        "confidence": 0.97,
-        "consensus_class": "variable_star",
-        "consensus_score": 0.96,
-        "shannon_entropy": 0.18,
-        "verification_status": "verified_discovery",
-        "release": "spherex_qr2",
-        "source_badge": "NASA Benchmark",
-    },
-    {
-        "subject_id": "cand_spx_2026_001",
-        "title": "SPX-J1124-0418",
-        "ra": 171.12540,
-        "dec": -4.30510,
-        "pm_ra_mas_yr": -1250.0,
-        "pm_dec_mas_yr": -850.0,
-        "total_pm_arcsec_yr": 1.512,
-        "primary_class": "moving_brown_dwarf",
-        "spectral_type": "T8 Candidate",
-        "confidence": 0.88,
-        "consensus_class": "moving_brown_dwarf",
-        "consensus_score": 0.86,
-        "shannon_entropy": 0.42,
-        "verification_status": "community_candidate",
-        "release": "spherex_qr2",
-        "source_badge": "Community Product",
-    },
-]
-
-ICE_ATLAS_RECORDS: list[dict[str, Any]] = [
-    {
-        "subject_id": "ice_splices_0104",
-        "target_star": "2MASS J18295678-0158421",
-        "ra": 277.48658,
-        "dec": -1.97836,
-        "cloud_region": "Serpens Core Dark Cloud",
-        "tau_h2o_3_05um": 1.45,
-        "tau_co2_4_27um": 0.38,
-        "tau_13co2_4_38um": 0.04,
-        "tau_co_4_67um": 0.22,
-        "tau_ch3oh_3_54um": 0.12,
-        "n_h2o_cm2": 2.90e18,
-        "n_co2_cm2": 4.94e17,
-        "n_co_cm2": 1.98e17,
-        "continuum_snr": 48.2,
-        "verification_status": "verified_discovery",
-    },
-    {
-        "subject_id": "ice_splices_0219",
-        "target_star": "2MASS J16272844-2439335",
-        "ra": 246.86850,
-        "dec": -24.65931,
-        "cloud_region": "Ophiuchus L1688",
-        "tau_h2o_3_05um": 2.15,
-        "tau_co2_4_27um": 0.52,
-        "tau_13co2_4_38um": 0.06,
-        "tau_co_4_67um": 0.35,
-        "tau_ch3oh_3_54um": 0.18,
-        "n_h2o_cm2": 4.30e18,
-        "n_co2_cm2": 6.75e17,
-        "n_co_cm2": 3.15e17,
-        "continuum_snr": 62.5,
-        "verification_status": "verified_discovery",
-    },
-    {
-        "subject_id": "ice_splices_0342",
-        "target_star": "2MASS J04300345+3513280",
-        "ra": 67.51438,
-        "dec": 35.22444,
-        "cloud_region": "Taurus B10 Filament",
-        "tau_h2o_3_05um": 0.88,
-        "tau_co2_4_27um": 0.21,
-        "tau_13co2_4_38um": 0.02,
-        "tau_co_4_67um": 0.11,
-        "tau_ch3oh_3_54um": 0.05,
-        "n_h2o_cm2": 1.76e18,
-        "n_co2_cm2": 2.73e17,
-        "n_co_cm2": 9.90e16,
-        "continuum_snr": 34.0,
-        "verification_status": "community_candidate",
-    },
-]
-
-VARIABILITY_RECORDS: list[dict[str, Any]] = [
-    {
-        "subject_id": "benchmark_rw_aur",
-        "title": "RW Aurigae",
-        "ra": 76.95647,
-        "dec": 30.40130,
-        "amplitude_delta_mag": 1.65,
-        "variability_type": "Occulting circumstellar dust screen",
-        "period_days": None,
-        "pass1_flux_mjy": 12.5,
-        "pass2_flux_mjy": 2.8,
-        "pass3_flux_mjy": 3.1,
-        "dimming_ratio": 4.46,
-        "verification_status": "verified_discovery",
-    },
-    {
-        "subject_id": "benchmark_r_dra",
-        "title": "R Draconis",
-        "ra": 248.16773,
-        "dec": 66.75504,
-        "amplitude_delta_mag": 1.72,
-        "variability_type": "Pulsating Mira variable AGB",
-        "period_days": 245.0,
-        "pass1_flux_mjy": 14.0,
-        "pass2_flux_mjy": 3.1,
-        "pass3_flux_mjy": 12.3,
-        "dimming_ratio": 4.51,
-        "verification_status": "verified_discovery",
-    },
-    {
-        "subject_id": "var_spx_2026_089",
-        "title": "SPX-V0852+1204",
-        "ra": 133.02410,
-        "dec": 12.07220,
-        "amplitude_delta_mag": 0.85,
-        "variability_type": "Semi-regular pulsating giant",
-        "period_days": 88.0,
-        "pass1_flux_mjy": 6.8,
-        "pass2_flux_mjy": 3.2,
-        "pass3_flux_mjy": 5.9,
-        "dimming_ratio": 2.12,
-        "verification_status": "community_candidate",
-    },
-]
-
-ARTIFACT_RECORDS: list[dict[str, Any]] = [
-    {
-        "subject_id": "art_blend_0012",
-        "ra": 120.45012,
-        "dec": 15.60234,
-        "artifact_class": "optical_blend",
-        "divergence_score": 0.72,
-        "ai_prediction": "moving_brown_dwarf",
-        "community_consensus": "optical_blend",
-        "flag_bits": ["OVERFLOW", "TRANSIENT"],
-        "flag_mask_hex": "0x0003",
-        "explanation": "Unresolved stationary background pair with discordant chromatic centroid shift",
-    },
-    {
-        "subject_id": "art_diffraction_0045",
-        "ra": 201.33210,
-        "dec": -18.44120,
-        "artifact_class": "diffraction_spike",
-        "divergence_score": 0.65,
-        "ai_prediction": "moving_brown_dwarf",
-        "community_consensus": "diffraction_spike",
-        "flag_bits": ["GHOST", "PERSISTENCE"],
-        "flag_mask_hex": "0x0480",
-        "explanation": "Optical ghost secondary internal reflection along detector mosaic boundary",
-    },
-    {
-        "subject_id": "art_cosmic_0088",
-        "ra": 85.12055,
-        "dec": -40.21040,
-        "artifact_class": "cosmic_ray_cluster",
-        "divergence_score": 0.81,
-        "ai_prediction": "moving_brown_dwarf",
-        "community_consensus": "cosmic_ray_cluster",
-        "flag_bits": ["TRANSIENT"],
-        "flag_mask_hex": "0x0001",
-        "explanation": "Single-read SUR cosmic ray hit mimicking high-pass dipole in differencing frame",
-    },
-]
-
 
 def _filter_records(
     records: list[dict[str, Any]],
@@ -426,7 +276,8 @@ def generate_fits_bintable(records: list[dict[str, Any]], product: str) -> bytes
 
 @router.get("/summary")
 async def get_export_summary() -> JSONResponse:
-    """Return catalog summary counts and byte estimations across all 4 products."""
+    """Return counts from persisted, classified community subjects."""
+    counts = await _get_product_counts()
     return JSONResponse(
         content={
             "attribution": "Community Product",
@@ -435,46 +286,27 @@ async def get_export_summary() -> JSONResponse:
             "products": {
                 "candidates": {
                     "title": "Community Candidate Catalog",
-                    "count": len(COMMUNITY_CANDIDATE_RECORDS),
-                    "verified_count": sum(
-                        1
-                        for r in COMMUNITY_CANDIDATE_RECORDS
-                        if r["verification_status"] == "verified_discovery"
-                    ),
+                    **counts["candidates"],
                     "formats": ["csv", "votable", "json"],
-                    "description": "High-proper-motion candidate movers, brown dwarfs, and variable stars.",
+                    "description": "Persisted community-classified subjects with candidate or verified status.",
                 },
                 "ices": {
                     "title": "Ice Feature Atlas",
-                    "count": len(ICE_ATLAS_RECORDS),
-                    "verified_count": sum(
-                        1 for r in ICE_ATLAS_RECORDS if r["verification_status"] == "verified_discovery"
-                    ),
+                    **counts["ices"],
                     "formats": ["csv", "fits"],
-                    "description": "Point-source interstellar ice column densities and optical depth integrals.",
+                    "description": "Classified subjects with stored ice-column measurements.",
                 },
                 "variability": {
                     "title": "Variability Alert List",
-                    "count": len(VARIABILITY_RECORDS),
-                    "verified_count": sum(
-                        1 for r in VARIABILITY_RECORDS if r["verification_status"] == "verified_discovery"
-                    ),
+                    **counts["variability"],
                     "formats": ["csv", "json"],
-                    "description": "Multi-epoch dimming alerts, pulsing Miras, and flashing stellar monitors.",
+                    "description": "Classified subjects stored under variability categories.",
                 },
                 "artifacts": {
                     "title": "Artifact Atlas",
-                    "count": len(ARTIFACT_RECORDS),
-                    "verified_count": len(ARTIFACT_RECORDS),
+                    **counts["artifacts"],
                     "formats": ["json", "hdf5"],
-                    "description": "Optical blends, diffraction spikes, and false-positive calibration controls.",
-                },
-                "ml-dataset": {
-                    "title": "PyTorch HDF5 Training Dataset",
-                    "count": 100,
-                    "verified_count": 100,
-                    "formats": ["fits", "hdf5"],
-                    "description": "Multi-epoch 14 B/px normalized tensors with ground-truth benchmark labels.",
+                    "description": "Classified subjects stored under artifact categories or model labels.",
                 },
             },
         }
@@ -492,21 +324,7 @@ async def export_data_product(
     clean_format = format.lower()
     clean_product = product.lower()
 
-    # Route to appropriate dataset
-    if clean_product == "candidates":
-        raw_records = COMMUNITY_CANDIDATE_RECORDS
-    elif clean_product == "ices":
-        raw_records = ICE_ATLAS_RECORDS
-    elif clean_product == "variability":
-        raw_records = VARIABILITY_RECORDS
-    elif clean_product in ("artifacts", "ml-dataset"):
-        raw_records = ARTIFACT_RECORDS
-    else:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown data product '{product}'. Valid products: candidates, ices, variability, artifacts, ml-dataset",
-        )
-
+    raw_records = await _load_product_records(clean_product, limit=limit)
     records = _filter_records(raw_records, verified_only=verified_only, limit=limit)
     timestamp_str = time.strftime("%Y%m%d_%H%M%S", time.gmtime())
     filename_base = f"spherex_community_{clean_product}_{timestamp_str}"

@@ -18,7 +18,7 @@ import { CelestialNavigator } from './tabs/CelestialNavigator';
 import { TimeDomainComparator } from './tabs/TimeDomainComparator';
 import { SpectrophotometricLab } from './tabs/SpectrophotometricLab';
 import { MolecularIceStudio } from './tabs/MolecularIceStudio';
-import { ObservationDiscussions } from './tabs/ObservationDiscussions';
+import { ObservationReviewDesk } from './tabs/ObservationReviewDesk';
 import { Button, Badge, Select } from './components/ui';
 
 /**
@@ -529,7 +529,7 @@ export const PublicExplorerPortal: React.FC = () => {
             )}
             {tab === 'spectral' && <SpectrophotometricLab />}
             {tab === 'ice' && <MolecularIceStudio />}
-            {tab === 'discussions' && <ObservationDiscussions />}
+            {tab === 'discussions' && <ObservationReviewDesk />}
           </>
         )}
       </main>
@@ -567,6 +567,35 @@ const LandingMissionPage: React.FC = () => {
 // Lazy-loaded administrative route chunk (SPECIFICATION.md §6.1.1: Physical chunk isolation)
 const AdminMissionControl = lazy(() => import('./admin/AdminLayout'));
 
+class AdminRouteErrorBoundary extends React.Component<
+  React.PropsWithChildren,
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <main className="flex min-h-dvh items-center justify-center bg-background px-6 text-foreground">
+          <section className="max-w-md rounded-xl border border-border bg-card p-6">
+            <p className="text-xs font-semibold uppercase tracking-wider text-amber-300">Mission Control could not load</p>
+            <p className="mt-2 text-sm text-muted-foreground">The admin workspace failed to load. Retry the route or return to the public sky view.</p>
+            <div className="mt-5 flex gap-2">
+              <button type="button" className="rounded-md bg-primary px-3 py-2 text-xs font-medium text-primary-foreground" onClick={() => window.location.reload()}>Retry</button>
+              <a className="rounded-md border border-border px-3 py-2 text-xs" href="/explore?tab=navigator">Return to sky view</a>
+            </div>
+          </section>
+        </main>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
@@ -585,7 +614,16 @@ export default function App() {
               <Route path="/1" element={<Navigate to="/explore?tab=navigator" replace />} />
               <Route path="/explore/*" element={<PublicExplorerPortal />} />
               {/* Zero-Auth Route-Isolated Admin Suite (No blocking login screens) */}
-              <Route path="/admin/*" element={<AdminMissionControl />} />
+              <Route
+                path="/admin/*"
+                element={
+                  <AdminRouteErrorBoundary>
+                    <Suspense fallback={<div className="flex min-h-dvh items-center justify-center bg-background text-sm text-muted-foreground" role="status">Loading Mission Control…</div>}>
+                      <AdminMissionControl />
+                    </Suspense>
+                  </AdminRouteErrorBoundary>
+                }
+              />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </Suspense>

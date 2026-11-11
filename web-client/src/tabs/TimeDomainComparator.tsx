@@ -680,14 +680,14 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
   const activeBand = BANDS[activeBandIndex];
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-black font-sans text-white">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-black font-sans text-white lg:flex-row lg:overflow-hidden">
       {/* ========================================================================= */}
       {/* LEFT PANEL (65%): Multi-Epoch Playback Canvas & Transport Deck            */}
       {/* ========================================================================= */}
-      <div className="flex w-[65%] flex-col border-r border-neutral-800 bg-black">
+      <div className="flex min-h-[72vh] w-full shrink-0 flex-col border-b border-neutral-800 bg-black lg:h-full lg:min-h-0 lg:w-[65%] lg:border-b-0 lg:border-r">
         {/* Top Control Header */}
-        <div className="flex h-10 items-center justify-between border-b border-neutral-800 bg-neutral-950 px-4">
-          <div className="flex items-center space-x-3 text-xs">
+        <div className="flex min-h-10 flex-wrap items-center justify-between gap-2 border-b border-neutral-800 bg-neutral-950 px-3 py-2 lg:h-10 lg:flex-nowrap lg:px-4 lg:py-0">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
             <span className="font-bold text-white">
               {activeBenchmark ? activeBenchmark.name : `Field at RA ${urlRa.toFixed(4)}°, Dec ${urlDec.toFixed(4)}°`}
             </span>
@@ -737,8 +737,8 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
         </div>
 
         {/* Central WebGL2 Canvas Viewport (Expansive & Fluid) */}
-        <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-black p-4">
-          <div className="relative h-full w-full max-h-[calc(100vh-220px)] max-w-[calc(100vh-220px)] aspect-square rounded-xl border border-neutral-800 bg-black shadow-2xl overflow-hidden flex items-center justify-center">
+        <div className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden bg-black p-2 lg:p-4">
+          <div className="relative aspect-square h-auto w-full max-h-[calc(100vh-220px)] max-w-[calc(100vh-220px)] overflow-hidden rounded-xl border border-neutral-800 bg-black shadow-2xl lg:h-full lg:w-full">
             <WebGLComparatorCanvas
               fluxData={currentFluxPlane}
               refFluxData={referenceFluxPlane}
@@ -934,7 +934,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
       {/* ========================================================================= */}
       {/* RIGHT PANEL (35%): Analysis Deck & Wavelength-Matched Matrix              */}
       {/* ========================================================================= */}
-      <div className="flex w-[35%] flex-col overflow-y-auto border-l border-neutral-800 bg-neutral-950 p-4 text-xs space-y-4">
+      <div className="flex w-full flex-col overflow-y-visible border-t border-neutral-800 bg-neutral-950 p-3 text-xs space-y-3 lg:h-full lg:w-[35%] lg:shrink-0 lg:overflow-y-auto lg:border-l lg:border-t-0 lg:p-4 lg:space-y-4">
         {/* Render Mode Switcher */}
         <section className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4 shadow-sm backdrop-blur">
           <div className="mb-2.5 flex items-center justify-between">
@@ -972,8 +972,11 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
             })}
           </div>
 
+          <details className="mt-4 border-t border-neutral-800/80 pt-3">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 text-[11px] font-medium text-neutral-300">Image display controls · Asinh a={asinhParamA.toFixed(3)} · {colorPalette.replace('_', ' ')} <span aria-hidden="true" className="text-primary">⌄</span></summary>
+            <div className="pt-3">
           {/* Faint Target Contrast Boost (Asinh) */}
-          <div className="mt-4 pt-3 border-t border-neutral-800/80">
+          <div>
             <div className="flex items-center justify-between text-xs">
               <span className="text-neutral-300 font-medium">Faint Contrast Boost (Asinh):</span>
               <span className="font-mono tabular-nums text-white text-[11px] bg-neutral-900 px-2 py-0.5 rounded border border-neutral-800">
@@ -1020,17 +1023,21 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
               ))}
             </div>
           </div>
+            </div>
+          </details>
         </section>
 
         {/* (Epoch x Band) Coverage Matrix & Wavelength-Matched Differencing Guard */}
-        <section className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4 shadow-sm backdrop-blur">
-          <div className="mb-2 flex items-center justify-between">
+        <details className="rounded-xl border border-neutral-800 bg-neutral-900/40 shadow-sm backdrop-blur">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-4">
             <h3 className="font-semibold text-white text-xs tracking-wide uppercase">Coverage Matrix</h3>
             <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
               Band-Match Guard Active
             </span>
-          </div>
+            <span aria-hidden="true" className="text-primary">⌄</span>
+          </summary>
+          <div className="px-4 pb-4">
           <p className="mb-3 text-[11px] text-neutral-400 leading-relaxed">
             Differencing is strictly confined to exposures within the same wavelength band window. Click any cell to switch epoch and spectral band.
           </p>
@@ -1104,8 +1111,12 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
               </tbody>
             </table>
           </div>
-        </section>
+          </div>
+        </details>
 
+        <details className="rounded-xl border border-neutral-800 bg-neutral-900/40 shadow-sm backdrop-blur">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-4 text-xs font-semibold uppercase tracking-wide text-white">Analysis tools · Light curve, motion, and triage <span aria-hidden="true" className="text-primary">⌄</span></summary>
+          <div className="space-y-4 px-3 pb-3 lg:px-4 lg:pb-4">
         {/* Forced 3x3 Aperture Photometry Light Curve */}
         <section className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4 shadow-sm backdrop-blur">
           <div className="mb-2 flex items-center justify-between">
@@ -1287,6 +1298,8 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
             </div>
           )}
         </section>
+          </div>
+        </details>
       </div>
     </div>
   );

@@ -673,7 +673,7 @@ export const MolecularIceStudio: React.FC = () => {
         setLiveSpectrum({
           wavelengthsUm: payload.wavelengths_um,
           flux: payload.flux_jy,
-          badge: payload.provenance?.source_badge || '[IRSA Live (spherex_qr2)]',
+          badge: payload.provenance?.source_badge || '[Source not supplied]',
         });
         setLiveStatus('ready');
       })
@@ -690,7 +690,11 @@ export const MolecularIceStudio: React.FC = () => {
     return {
       wavelengthsUm: syntheticSpectrum.wavelengthsUm,
       flux: syntheticSpectrum.flux,
-      badge: selectedTarget.badge,
+      badge: sourceMode === 'live'
+        ? liveStatus === 'loading'
+          ? '[Synthetic SPLICES Template · live fetch loading]'
+          : '[Synthetic SPLICES Template · live fetch unavailable]'
+        : '[Synthetic SPLICES Template]',
     };
   }, [liveSpectrum, selectedTarget.badge, sourceMode, syntheticSpectrum]);
 
@@ -811,9 +815,9 @@ export const MolecularIceStudio: React.FC = () => {
   }, [effectiveSolution, photometry, selectedTarget]);
 
   return (
-    <div className="flex h-full w-full overflow-hidden bg-background font-sans text-xs text-foreground">
+      <div className="flex h-full min-h-0 w-full flex-col overflow-x-hidden overflow-y-auto bg-background font-sans text-xs text-foreground lg:flex-row lg:overflow-hidden">
       {/* LEFT PANEL — SPLICES Background Target Explorer */}
-      <section className="flex w-[46%] min-w-[430px] flex-col gap-3 overflow-y-auto border-r border-border p-4">
+      <section className="flex min-h-[72vh] w-full shrink-0 flex-col gap-3 overflow-y-auto border-b border-border p-3 sm:p-4 lg:h-full lg:min-h-0 lg:w-[46%] lg:min-w-[430px] lg:border-b-0 lg:border-r">
         <header className="flex items-start justify-between gap-2 border-b border-border pb-2.5">
           <div>
             <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground">
@@ -945,7 +949,10 @@ export const MolecularIceStudio: React.FC = () => {
           )}
         </fieldset>
 
-        <div className="grid grid-cols-3 gap-2">
+        <details className="rounded-sm border border-border bg-card p-3">
+          <summary className="cursor-pointer text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Photometry &amp; continuum settings <span aria-hidden="true" className="ml-1 text-primary">⌄</span></summary>
+          <div className="mt-3 space-y-3">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
           <label className="text-[11px] text-muted-foreground">
             Aperture radius [px]
             <Input
@@ -1010,6 +1017,8 @@ export const MolecularIceStudio: React.FC = () => {
             </dd>
           </dl>
         </div>
+          </div>
+        </details>
 
         {solution.brownDwarfNotice && (
           <div className="rounded-sm border border-amber-500/40 bg-amber-500/10 p-3 text-[11px] leading-relaxed text-amber-200">
@@ -1049,15 +1058,12 @@ export const MolecularIceStudio: React.FC = () => {
       </section>
 
       {/* RIGHT PANEL — Optical Depth Lab */}
-      <section className="flex min-w-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
+      <section className="flex min-w-0 w-full flex-1 flex-col gap-3 overflow-y-visible p-3 sm:p-4 lg:h-full lg:w-auto lg:overflow-y-auto">
         <header className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2.5">
           <div>
             <h2 className="text-xs font-semibold uppercase tracking-wide text-foreground">
               Optical Depth Lab
             </h2>
-            <p className="mt-0.5 font-mono text-[11px] tabular-nums text-muted-foreground">
-              τ(λ) = −ln(F_obs / F_cont) · ν = 10000 / λ · N_ice = (1/A) ∫ τ(ν) dν
-            </p>
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-muted-foreground">Mode</span>
@@ -1097,6 +1103,11 @@ export const MolecularIceStudio: React.FC = () => {
             </Button>
           </div>
         </header>
+
+        <details className="rounded-sm border border-border bg-card px-3 py-2">
+          <summary className="cursor-pointer text-[11px] font-semibold text-muted-foreground">Continuum and optical-depth method <span aria-hidden="true" className="ml-1 text-primary">⌄</span></summary>
+          <p className="mt-2 font-mono text-[11px] tabular-nums text-foreground">τ(λ) = −ln(F_obs / F_cont) · ν = 10000 / λ · N_ice = (1/A) ∫ τ(ν) dν</p>
+        </details>
 
         <div className="rounded-sm border border-border bg-black/60 p-3">
           <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -1217,7 +1228,8 @@ export const MolecularIceStudio: React.FC = () => {
                 : `${effectiveSolution.ratioPercent.toFixed(2)}%`}
             </Badge>
           </div>
-          <table className="w-full border-collapse text-left font-mono text-[11px] tabular-nums">
+          <div className="max-w-full overflow-x-auto">
+          <table className="min-w-[680px] w-full border-collapse text-left font-mono text-[11px] tabular-nums">
             <thead className="border-b border-border bg-secondary font-sans text-[10px] text-muted-foreground">
               <tr>
                 <th className="py-1.5 pl-3">Molecular ruler</th>
@@ -1251,6 +1263,7 @@ export const MolecularIceStudio: React.FC = () => {
               })}
             </tbody>
           </table>
+          </div>
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-3 py-2 text-[10px] text-muted-foreground">
             <span>{selectedBands.length} active molecular rulers · trapezoidal integration in wavenumber space</span>
             <span>Literature A-values: Gerakines 1995 · Boogert 2000 · Jiang 1975 · Kerkhof 1999</span>

@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState, useMemo } from 'react';
-import { useAdminTelemetry, Hyperparameters } from './hooks/useAdminTelemetry';
+import { useAdminTelemetry } from './hooks/useAdminTelemetryLive';
+import { AdminDataState } from './AdminDataState';
 import { Button, Badge, Select, Input } from '../components/ui';
 import { cn } from '../lib/utils';
 
@@ -9,24 +10,25 @@ import { cn } from '../lib/utils';
  * 
  * Embeds real-time training monitor with:
  * - Hyperparameter controls & run triggers
- * - Live scalar learning curves (Train vs Val Loss) with overfitting amber alert
+ * - Persisted scalar learning curves (Train vs Val Loss) with overfitting amber alert
  * - Early-stopping checkpoint recommendation
  * - Gradient L2 norm & Cosine LR monitors
- * - Live 3x3 Validation Confusion Matrix heatmap
+ * - Persisted validation confusion-matrix heatmap
  */
 export const TrainingDynamics: React.FC = () => {
   const {
     hyperparams,
-    setHyperparams,
     activeEpoch,
     totalEpochs,
     currentFrame,
     frames,
+    isLoading,
+    loadError,
     isRunning,
     isPaused,
     playbackSpeedMs,
     setPlaybackSpeedMs,
-    isDemoMode,
+    hasStoredHyperparameters,
     overfittingAnalysis,
     startTrainingRun,
     pauseTrainingRun,
@@ -259,48 +261,29 @@ export const TrainingDynamics: React.FC = () => {
     }
   };
 
-  const currentMetrics = currentFrame?.metrics || {
-    train_loss: 0.14,
-    val_loss: 0.23,
-    val_f1: 0.942,
-    lr: 8.4e-5,
-    global_grad_norm: 0.042,
-  };
+  if (isLoading || !currentFrame) {
+    return <AdminDataState title={loadError ? 'Training history unavailable' : 'No persisted training run'} detail={loadError ?? 'A training history will appear here after a real model run is persisted by the backend.'} loading={isLoading} />;
+  }
 
-  const confusion = currentFrame?.confusion || {
-    classes: ['Pred Mover', 'Pred Var', 'Pred Art'],
-    matrix: [
-      [142, 4, 2],
-      [3, 118, 1],
-      [1, 2, 96],
-    ],
-    precision: 95.1,
-    recall: 93.8,
-    macro_f1: 94.2,
-  };
-
-  const gradNormStatus = useMemo(() => {
+  const currentMetrics = currentFrame.metrics;
+  const confusion = currentFrame.confusion;
+  const gradNormStatus = (() => {
     const norm = currentMetrics.global_grad_norm;
     if (norm < 1e-5) return { text: 'Vanishing (<1e-5)', color: 'text-amber-400' };
     if (norm > 10.0) return { text: 'Exploding (>10.0)', color: 'text-red-400' };
-    return { text: 'Stable (0.042)', color: 'text-emerald-400' };
-  }, [currentMetrics.global_grad_norm]);
+    return { text: `Stable (${norm.toPrecision(2)})`, color: 'text-emerald-400' };
+  })();
 
   return (
     <div className="flex flex-col h-full bg-background text-foreground p-4 gap-4 overflow-y-auto">
-      {/* TOP CONTROLLER: Hyperparameter Configuration & Run Triggers */}
-      <div className="rounded-sm border border-border bg-card p-4 shadow-sm">
+      {/* Stored run playback and configuration */}
+      {hasStoredHyperparameters ? <div className="rounded-sm border border-border bg-card p-4 shadow-sm">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border pb-3 mb-3">
           <div className="flex items-center gap-2">
             <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
             <h2 className="text-xs font-semibold tracking-wide text-foreground">
-              Hyperparameter configuration & run triggers
+              Stored run parameters & history playback
             </h2>
-            {isDemoMode && (
-              <Badge variant="amber" className="font-mono text-[10px]">
-                Deterministic simulator active
-              </Badge>
-            )}
           </div>
           <div className="flex items-center gap-2">
             <Button
@@ -308,14 +291,14 @@ export const TrainingDynamics: React.FC = () => {
               variant={isRunning && !isPaused ? 'secondary' : 'default'}
               onClick={isRunning ? pauseTrainingRun : (isPaused ? resumeTrainingRun : startTrainingRun)}
             >
-              {isRunning && !isPaused ? 'Pause after epoch' : isPaused ? 'Resume run' : 'Start live training run'}
+              {isRunning && !isPaused ? 'Pause history' : isPaused ? 'Resume history' : 'Play saved run'}
             </Button>
             <Button
               size="sm"
               variant="destructive"
               onClick={abortTrainingRun}
             >
-              Abort / rollback
+              Stop playback
             </Button>
           </div>
         </div>
@@ -327,7 +310,7 @@ export const TrainingDynamics: React.FC = () => {
               sizeVariant="sm"
               className="w-full"
               value={hyperparams.model}
-              onChange={(e) => setHyperparams({ ...hyperparams, model: e.target.value as Hyperparameters['model'] })}
+              disabled
             >
               <option value="DipoleConvNet3D">Dipole ConvNet 3D</option>
               <option value="SpectralResNet102">Spectral 1D-ResNet</option>
@@ -341,7 +324,7 @@ export const TrainingDynamics: React.FC = () => {
               sizeVariant="sm"
               className="w-full"
               value={hyperparams.batchSize}
-              onChange={(e) => setHyperparams({ ...hyperparams, batchSize: Number(e.target.value) })}
+              disabled
             >
               <option value="16">16 stamps</option>
               <option value="32">32 stamps</option>
@@ -356,7 +339,7 @@ export const TrainingDynamics: React.FC = () => {
               sizeVariant="sm"
               className="w-full"
               value={hyperparams.lr}
-              onChange={(e) => setHyperparams({ ...hyperparams, lr: Number(e.target.value) })}
+              disabled
             >
               <option value="0.001">1e-3</option>
               <option value="0.0003">3e-4</option>
@@ -371,7 +354,7 @@ export const TrainingDynamics: React.FC = () => {
               sizeVariant="sm"
               className="w-full"
               value={hyperparams.optimizer}
-              onChange={(e) => setHyperparams({ ...hyperparams, optimizer: e.target.value as Hyperparameters['optimizer'] })}
+              disabled
             >
               <option value="AdamW">AdamW (Decay 0.01)</option>
               <option value="Adam">Adam</option>
@@ -402,22 +385,22 @@ export const TrainingDynamics: React.FC = () => {
               min="0"
               max="100"
               value={hyperparams.communityWeight}
-              onChange={(e) => setHyperparams({ ...hyperparams, communityWeight: Number(e.target.value) })}
+              disabled
               className="flex-1 accent-primary cursor-pointer"
             />
             <span className="text-[10px] text-muted-foreground">Gold (100%)</span>
           </div>
         </div>
-      </div>
+      </div> : <p className="rounded-lg border border-border bg-card p-4 text-xs text-muted-foreground">Run parameters were not included in the stored training record.</p>}
 
       {/* DUAL PANEL: Left 50% Curves, Right 50% Confusion Matrix */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 flex-1 min-h-[420px]">
-        {/* LEFT PANEL: Live Scalar Learning Curves */}
+        {/* LEFT PANEL: Persisted Scalar Learning Curves */}
         <div className="flex flex-col rounded-sm border border-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between border-b border-border pb-2 mb-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-semibold text-foreground">
-                Scalar learning curves
+                Stored training curves
               </span>
               <span className="text-[11px] font-mono text-muted-foreground">
                 Epoch {activeEpoch} / {totalEpochs} ({Math.round((activeEpoch / totalEpochs) * 100)}%)
@@ -437,7 +420,7 @@ export const TrainingDynamics: React.FC = () => {
           </div>
 
           {/* Overfitting alert badge */}
-          {overfittingAnalysis.isOverfitting && (
+          {overfittingAnalysis.isOverfitting && overfittingAnalysis.optimalCheckpoint !== null && (
             <div className="mb-2 rounded-sm border border-amber-500/30 bg-amber-500/10 p-2 text-xs text-amber-300 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Badge variant="amber" className="text-[10px]">Alert</Badge>
@@ -446,7 +429,10 @@ export const TrainingDynamics: React.FC = () => {
               <Button
                 size="xs"
                 variant="outline"
-                onClick={() => scrubToEpoch(overfittingAnalysis.optimalCheckpoint)}
+                onClick={() => {
+                  const checkpoint = overfittingAnalysis.optimalCheckpoint;
+                  if (checkpoint !== null) scrubToEpoch(checkpoint);
+                }}
                 className="border-amber-500/30 text-amber-200 hover:bg-amber-500/20"
               >
                 Jump to epoch {overfittingAnalysis.optimalCheckpoint}
@@ -488,7 +474,7 @@ export const TrainingDynamics: React.FC = () => {
           </div>
         </div>
 
-        {/* RIGHT PANEL: Telemetry & Live 3x3 Confusion Matrix */}
+        {/* RIGHT PANEL: Persisted Telemetry & Confusion Matrix */}
         <div className="flex flex-col rounded-sm border border-border bg-card p-4 shadow-sm">
           <div className="flex items-center justify-between border-b border-border pb-2 mb-3">
             <span className="text-xs font-semibold text-foreground">
@@ -535,7 +521,7 @@ export const TrainingDynamics: React.FC = () => {
           {/* 3x3 Heatmap Grid */}
           <div className="flex-1 flex flex-col justify-center">
             <h3 className="text-xs font-medium text-muted-foreground mb-2 text-center">
-              Live K×K Confusion Matrix (Rows: Ground Truth, Cols: Model Prediction)
+              Stored confusion matrix (rows: ground truth, columns: model prediction)
             </h3>
 
             <div className="overflow-x-auto">
