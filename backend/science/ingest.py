@@ -15,9 +15,11 @@ import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 import numpy as np
+import requests
 from astropy.io import fits
 
 
@@ -421,6 +423,103 @@ def _read_fits_image_section(
     return np.asarray(hdu.section[section], dtype=dtype)
 
 
+class _HTTPRangeReader(io.RawIOBase):
+    """Seekable FITS source backed by bounded anonymous HTTP Range requests."""
+
+    def __init__(self, url: str, block_size: int = 1024 * 1024) -> None:
+        super().__init__()
+        self._url = url
+        self._block_size = block_size
+        self._position = 0
+        self._cached_start = -1
+        self._cached_data = b""
+        self._session = requests.Session()
+        try:
+            response = self._session.get(
+                self._url, headers={"Range": "bytes=0-0"}, timeout=(10, 30)
+            )
+            try:
+                response.raise_for_status()
+                content_range = response.headers.get("Content-Range", "")
+                expected_prefix = "bytes 0-0/"
+                if response.status_code != 206 or not content_range.startswith(expected_prefix):
+                    raise OSError("S3 endpoint did not honor the FITS byte-range request")
+                self._size = int(content_range[len(expected_prefix) :])
+            finally:
+                response.close()
+        except Exception:
+            self._session.close()
+            raise
+
+    def _fetch_range(self, start: int, end: int) -> bytes:
+        expected_size = end - start + 1
+        with self._session.get(
+            self._url,
+            headers={"Range": f"bytes={start}-{end}"},
+            timeout=(10, 30),
+        ) as response:
+            response.raise_for_status()
+            expected_range = f"bytes {start}-{end}/{self._size}"
+            if response.status_code != 206 or response.headers.get("Content-Range") != expected_range:
+                raise OSError("S3 returned an unexpected FITS byte range")
+            data = response.content
+            if len(data) != expected_size:
+                raise OSError("S3 returned an incomplete FITS byte range")
+            return data
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return self._position
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if whence == io.SEEK_CUR:
+            offset += self._position
+        elif whence == io.SEEK_END:
+            offset += self._size
+        elif whence != io.SEEK_SET:
+            raise ValueError(f"Invalid seek mode: {whence}")
+        if offset < 0:
+            raise ValueError("Cannot seek before the start of the FITS object")
+        self._position = offset
+        return offset
+
+    def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            size = self._size - self._position
+        remaining = min(size, max(0, self._size - self._position))
+        chunks = []
+        while remaining:
+            block_start = (self._position // self._block_size) * self._block_size
+            if block_start != self._cached_start:
+                block_end = min(self._size, block_start + self._block_size) - 1
+                cached_data = self._fetch_range(block_start, block_end)
+                self._cached_start = block_start
+                self._cached_data = cached_data
+            offset = self._position - self._cached_start
+            count = min(remaining, len(self._cached_data) - offset)
+            if count <= 0:
+                raise OSError("S3 returned an incomplete FITS byte range")
+            chunks.append(self._cached_data[offset : offset + count])
+            self._position += count
+            remaining -= count
+        return b"".join(chunks)
+
+    def readinto(self, buffer: Any) -> int:
+        data = self.read(len(buffer))
+        buffer[: len(data)] = data
+        return len(data)
+
+    def close(self) -> None:
+        if not self.closed:
+            self._session.close()
+        super().close()
+
+
 def _fetch_cutout_from_s3(
     s3_access: str,
     ra: float,
@@ -429,17 +528,20 @@ def _fetch_cutout_from_s3(
     collection: str,
 ) -> dict[str, Any]:
     """Read FITS sections from anonymous S3 ranges and crop them around the target."""
-    import fsspec
     from astropy import units as u
     from astropy.coordinates import SkyCoord
     from astropy.wcs import WCS
     from astropy.wcs.utils import proj_plane_pixel_scales
 
     s3_uri, region = _parse_s3_access(s3_access)
-    storage_options: dict[str, Any] = {"anon": True}
-    if region:
-        storage_options["client_kwargs"] = {"region_name": region}
-    filesystem, object_path = fsspec.core.url_to_fs(s3_uri, **storage_options)
+    bucket, key = s3_uri[5:].split("/", 1)
+    endpoint_region = region or "us-east-1"
+    hostname = (
+        f"{bucket}.s3.amazonaws.com"
+        if endpoint_region == "us-east-1"
+        else f"{bucket}.s3.{endpoint_region}.amazonaws.com"
+    )
+    object_url = f"https://{hostname}/{quote(key, safe='/')}"
     result: dict[str, Any] = {
         "hdu1_image": None,
         "hdu2_flags": None,
@@ -450,7 +552,7 @@ def _fetch_cutout_from_s3(
         "hdu1_header": None,
         "metadata": {"collection": collection, "wcs": "TAN/SIP"},
     }
-    with filesystem.open(object_path, "rb") as remote_file, fits.open(
+    with _HTTPRangeReader(object_url) as remote_file, fits.open(
         remote_file, memmap=False, lazy_load_hdus=True
     ) as hdul:
             image_hdu = next(
@@ -481,6 +583,8 @@ def _fetch_cutout_from_s3(
             image_shape = (int(image_hdu.header["NAXIS2"]), int(image_hdu.header["NAXIS1"]))
             result["hdu1_header"] = image_hdu.header.copy()
             result["hdu1_header"].update(wcs.slice(section).to_header(relax=True))
+            result["hdu1_header"]["NAXIS1"] = x1 - x0
+            result["hdu1_header"]["NAXIS2"] = y1 - y0
             result["hdu1_header"]["LTV1"] = float(image_hdu.header.get("LTV1", 0.0)) + x0
             result["hdu1_header"]["LTV2"] = float(image_hdu.header.get("LTV2", 0.0)) + y0
             result["metadata"].update(
@@ -509,9 +613,12 @@ def _fetch_cutout_from_s3(
                 )
                 if hdu is not None:
                     try:
-                        result[output_key] = _read_fits_image_section(
-                            hdu, y0, y1, x0, x1, image_shape, dtype
-                        )
+                        if output_key == "hdu5_psf":
+                            result[output_key] = np.asarray(hdu.data, dtype=dtype)
+                        else:
+                            result[output_key] = _read_fits_image_section(
+                                hdu, y0, y1, x0, x1, image_shape, dtype
+                            )
                     except ValueError:
                         if output_key in {"hdu2_flags", "hdu3_variance"}:
                             raise
@@ -529,13 +636,7 @@ def _fetch_cutout_from_s3(
             if wave_hdu is not None and wave_hdu.data is not None:
                 wave_tab: dict[str, np.ndarray] = {}
                 for name in ("X", "Y", "VALUES"):
-                    values = np.asarray(wave_hdu.data[name][0], dtype=np.float64)
-                    if values.ndim >= 2 and values.shape[-2:] == (
-                        int(image_hdu.header["NAXIS2"]),
-                        int(image_hdu.header["NAXIS1"]),
-                    ):
-                        values = values[..., y0:y1, x0:x1]
-                    wave_tab[name] = values
+                    wave_tab[name] = np.asarray(wave_hdu.data[name][0], dtype=np.float64)
                 result["hdu6_wave_tab"] = wave_tab
     return result
 
