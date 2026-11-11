@@ -2,8 +2,8 @@
 import math
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
+from torch import nn
 
 # Module whose activations/gradients feed the feature maps and Grad-CAM.
 TARGET_LAYERS = {

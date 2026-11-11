@@ -9,7 +9,6 @@ import json
 import os
 import threading
 from collections import deque
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, Field
@@ -44,7 +43,7 @@ def mutations_enabled() -> bool:
     return os.getenv("ADMIN_MUTATIONS_ENABLED", "false").strip().lower() == "true"
 
 
-def require_admin(x_admin_token: Optional[str] = Header(default=None), authorization: Optional[str] = Header(default=None)):
+def require_admin(x_admin_token: str | None = Header(default=None), authorization: str | None = Header(default=None)):
     """403 unless mutations are enabled AND a valid ADMIN_TOKEN is supplied."""
     expected = os.getenv("ADMIN_TOKEN", "")
     supplied = x_admin_token or ""
@@ -109,7 +108,7 @@ class AdminTelemetryHub:
         for ws in list(self._clients.get(model, ())):
             try:
                 await ws.send_text(payload)
-            except Exception:
+            except Exception:  # noqa: BLE001
                 self.disconnect(ws, model)
 
 
@@ -158,7 +157,7 @@ async def retrain(req: RetrainRequest):
                 asyncio.run_coroutine_threadsafe(hub.publish(req.model, frame), loop)
 
             await asyncio.to_thread(trainer.run_training, req.model, req.epochs, req.seed, "live", on_frame)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             await hub.publish(req.model, {"type": "error", "detail": str(exc)})
         finally:
             _training_lock.release()

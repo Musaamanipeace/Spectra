@@ -1,9 +1,17 @@
+import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+BACKEND = Path(__file__).resolve().parents[1]
+for p in (REPO_ROOT, BACKEND):
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 from backend import admin_ws
 
@@ -49,5 +57,6 @@ def test_ws_replays_cached_frames(client, monkeypatch):
 
 
 def test_no_torch_or_sklearn_on_import():
+    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
     code = "import sys, backend.admin_ws; assert 'torch' not in sys.modules and 'sklearn' not in sys.modules"
-    subprocess.run([sys.executable, "-c", code], check=True)
+    subprocess.run([sys.executable, "-c", code], env=env, check=True)
