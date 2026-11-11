@@ -206,6 +206,27 @@ async def create_cutout(
                 }
             _active_request_tasks.pop(request_key, None)
 
+        cached = await tensor_cache.get(f"request:{request_key}")
+        if (
+            cached
+            and time.monotonic() - float(cached[1].get("cached_at", 0))
+            < _COMPLETED_TENSOR_TTL_SECONDS
+        ):
+            task_id = _new_task_id()
+            await tensor_cache.set(f"tensor:{task_id}", cached[0], cached[1])
+            task_states[task_id] = {
+                "status": "complete",
+                "progress": 1.0,
+                "stage": "complete",
+                "message": "Complete (cached)",
+            }
+            logger.info("Cutout request cache hit task=%s", task_id)
+            return {
+                "task_id": task_id,
+                "status": "complete",
+                "detail": "Cutout request served from the completed tensor cache",
+            }
+
         await _ensure_worker()
         task_id = await _enqueue_cutout_task(
             body.ra,
@@ -418,6 +439,12 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                     matched_res = filter_wavelength_matched_exposures(
                         candidate_exps, ra=ra, dec=dec, adaptive_window=adaptive_window
                     )
+                    logger.info(
+                        "Cutout task=%s wavelength_matches=%d candidates=%d",
+                        task_id,
+                        len(matched_res.matched_exposures),
+                        len(candidate_exps),
+                    )
                     if matched_res.matched_exposures:
                         await update_stage(
                             "reprojection",
@@ -561,6 +588,11 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
             if request_key:
                 await tensor_cache.set(f"request:{request_key}", payload, metadata)
 
+        logger.info(
+            "Cutout task=%s stage=packaging duration_s=%.3f",
+            task_id,
+            time.monotonic() - stage_started_at,
+        )
         logger.info(
             "Cutout task=%s stage=total duration_s=%.3f", task_id, time.monotonic() - started_at
         )
