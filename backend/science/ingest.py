@@ -585,8 +585,8 @@ def _fetch_cutout_from_s3(
             result["hdu1_header"].update(wcs.slice(section).to_header(relax=True))
             result["hdu1_header"]["NAXIS1"] = x1 - x0
             result["hdu1_header"]["NAXIS2"] = y1 - y0
-            result["hdu1_header"]["LTV1"] = float(image_hdu.header.get("LTV1", 0.0)) + x0
-            result["hdu1_header"]["LTV2"] = float(image_hdu.header.get("LTV2", 0.0)) + y0
+            result["hdu1_header"]["LTV1"] = float(image_hdu.header.get("LTV1", 0.0)) - x0
+            result["hdu1_header"]["LTV2"] = float(image_hdu.header.get("LTV2", 0.0)) - y0
             result["metadata"].update(
                 {
                     "LTV1": result["hdu1_header"]["LTV1"],
