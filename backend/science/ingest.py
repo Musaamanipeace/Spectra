@@ -50,9 +50,25 @@ logger = logging.getLogger(__name__)
 
 # IRSA SIA2 Endpoint configuration
 SIA2_ENDPOINT = "https://irsa.ipac.caltech.edu/SIA"
-DEFAULT_COLLECTION = os.getenv("IRSA_COLLECTION", "spherex_qr3").strip().lower()
-if DEFAULT_COLLECTION not in {"spherex_qr2", "spherex_qr3"}:
-    raise ValueError("IRSA_COLLECTION must be spherex_qr2 or spherex_qr3")
+_configured_collections = os.getenv("IRSA_COLLECTIONS")
+if _configured_collections is not None:
+    DEFAULT_COLLECTIONS = tuple(
+        dict.fromkeys(
+            value.strip().lower()
+            for value in _configured_collections.split(",")
+            if value.strip()
+        )
+    )
+elif os.getenv("IRSA_COLLECTION"):
+    # Keep the legacy single-release setting usable for existing deployments.
+    DEFAULT_COLLECTIONS = (os.getenv("IRSA_COLLECTION", "").strip().lower(),)
+else:
+    DEFAULT_COLLECTIONS = ("spherex_qr2", "spherex_qr3")
+if not DEFAULT_COLLECTIONS or any(
+    value not in {"spherex_qr2", "spherex_qr3"} for value in DEFAULT_COLLECTIONS
+):
+    raise ValueError("IRSA_COLLECTIONS must contain spherex_qr2 and/or spherex_qr3")
+DEFAULT_COLLECTION = DEFAULT_COLLECTIONS[0]
 DEFAULT_RADIUS_DEG = 0.5  # 30 arcmin default
 
 
@@ -446,7 +462,7 @@ async def ingest_exposures_for_target(
     ra: float,
     dec: float,
     fov_arcsec: int = 300,
-    collection: str = DEFAULT_COLLECTION,
+    collection: str | list[str] | tuple[str, ...] | None = None,
     bands: list[int] | None = None,
     adaptive_window: bool = False,
 ) -> dict[str, Any]:
@@ -461,8 +477,20 @@ async def ingest_exposures_for_target(
 
     SPECIFICATION.md §3.1, §4.1: Complete ingestion driver.
     """
+    if collection is None:
+        collections = DEFAULT_COLLECTIONS
+    elif isinstance(collection, str):
+        collections = (collection.strip().lower(),)
+    else:
+        collections = tuple(dict.fromkeys(value.strip().lower() for value in collection))
+    if not collections or any(
+        value not in {"spherex_qr2", "spherex_qr3"} for value in collections
+    ):
+        raise ValueError("collection must contain spherex_qr2 and/or spherex_qr3")
+
     result: dict[str, Any] = {
-        "collection": collection,
+        "collection": " + ".join(collections),
+        "collections": list(collections),
         "ra": ra,
         "dec": dec,
         "fov_arcsec": fov_arcsec,
@@ -478,13 +506,24 @@ async def ingest_exposures_for_target(
     try:
         # Step 1: SIA2 cone query
         logger.info(f"SIA2 query: RA={ra}, Dec={dec}, FoV={fov_arcsec}''")
-        sia2_result = await query_sia2_cone(
-            ra, dec, radius_deg=fov_arcsec / 3600.0, collection=collection
+        sia2_results = await asyncio.gather(
+            *(
+                query_sia2_cone(
+                    ra, dec, radius_deg=fov_arcsec / 3600.0, collection=source
+                )
+                for source in collections
+            )
         )
-        result["sia2_query"] = sia2_result
+        result["sia2_query"] = dict(zip(collections, sia2_results, strict=True))
         result["status"] = "sia2_queried"
 
-        if not sia2_result.get("exposure_ids"):
+        exposures = []
+        for source, sia2_result in zip(collections, sia2_results, strict=True):
+            for exposure in _format_exposures_for_grouping(sia2_result):
+                exposure["collection"] = source
+                exposures.append(exposure)
+
+        if not exposures:
             logger.warning(f"No exposures found via SIA2 for RA={ra}, Dec={dec}")
             result["error"] = "No exposures found via SIA2"
             result["status"] = "no_exposures"
@@ -493,7 +532,6 @@ async def ingest_exposures_for_target(
         # Step 2: Cluster the exposures returned for this coordinate. QR2 and
         # QR3 have different release coverage, so static release-date windows
         # cannot be used as the source of the target's epochs.
-        exposures = _format_exposures_for_grouping(sia2_result)
         gap_days = 30.0
         try:
             config_path = Path(__file__).resolve().parent.parent / "config" / "survey_passes.json"
@@ -549,7 +587,7 @@ async def ingest_exposures_for_target(
                     fov_arcsec / 3600.0,
                     bands=bands,
                     adaptive_window=adaptive_window,
-                    collection=collection,
+                    collection=str(exposure["collection"]),
                 )
             if cutout.get("hdu1_image") is None or cutout.get("hdu1_header") is None:
                 return None
