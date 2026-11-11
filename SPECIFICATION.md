@@ -375,7 +375,7 @@ To minimize network transfer latency over constrained mobile and venue networks 
 - A live WISE 0855 query returned 261 QR2 SIA rows and zero QR3 rows. A QR2-only tensor is therefore correct for that target; QR3 absence is not an ingestion failure.
 - A live QR3 S3 object returned the required cutout HDUs through the fallback. One 1 MiB HTTPS Range request took approximately 15 seconds in this development environment. This is one observation, not a latency distribution.
 - The current client allows at most two IRSA attempts within one 45-second exposure deadline, then attempts the S3 fallback. S3 range reads have a 60-second object-read deadline after the initial range probe.
-- One 1 MiB S3 range request took approximately 15 seconds in the earlier development observation. Current logs record queue wait, stage durations, SIA duration/row counts, selected exposure counts, and per-exposure source/duration. S3 range count/bytes, wavelength-match counts, and separate coaddition timing still need instrumentation.
+- One 1 MiB S3 range request took approximately 15 seconds in the earlier development observation. Logs now record queue wait/depth, stage durations, SIA duration/row counts, selected exposure counts by release, IRSA attempt/status/bytes/duration, S3 range count/bytes/cache hits/duration, wavelength-match counts, and per-exposure outcomes. These logs are diagnostic samples, not yet a durable benchmark dataset.
 - No cold/warm benchmark has been collected after these changes. There are no measured p50/p95 request latencies; the acceptance goals below remain unverified.
 
 #### Implemented optimization controls (not yet benchmarked)
@@ -385,7 +385,7 @@ To minimize network transfer latency over constrained mobile and venue networks 
 - Progress now advances as discovery, grouping, individual cutout fetches, reprojection, and packaging actually begin. The synchronous S3 reader has a bounded deadline; cancellation cannot forcibly terminate an already-running Python worker thread, but its range requests remain time-limited.
 
 #### Optimization order
-1. **Instrument before tuning.** Record queue wait/depth, deduplication count, SIA duration and rows by release, selected exposure count by release, IRSA attempt/status/bytes/duration, S3 range count/bytes/duration, wavelength-match count, reprojection, coaddition, and packaging time. Progress state must match the active stage.
+1. **Instrument before tuning.** Runtime logs now record queue wait/depth, deduplication, SIA duration/rows, selected exposure counts, IRSA attempts/status/bytes/duration, S3 range counts/bytes/cache hits/duration, wavelength-match counts, and stage durations. Add persistent benchmark capture and per-HDU byte accounting, then use the resulting baseline to tune the pipeline. Progress state must match the active stage.
 2. **Remove repeated archive work.** Implemented: SIA results are cached by normalized target cone and release for 10 minutes; completed tensors are cached by request fingerprint for 15 minutes; a bounded S3 byte-range cache uses URL, ETag, and range. These caches are in-process and are lost on restart. Confirm cache hit rates and memory impact in the benchmark.
 3. **Reduce bytes per time-domain task.** Do not fetch PSF HDU 5 for the Time-Domain Comparator. Keep full WCS-WAVE support initially; benchmark a detector-coordinate lookup slice and accept it only after numerical comparison against full-table results. Preserve full PSF/WCS-WAVE access for consumers that need them.
 4. **Bound slow requests.** Implemented: two IRSA attempts share a 45-second deadline; incomplete responses or deadline expiry proceed to S3. The S3 range reader has a 60-second object-read budget after its initial probe. Synchronous range reads run in a thread and cannot be immediately killed on coroutine cancellation; replace this with cancellable I/O if measurements show cancellation delay is material.
@@ -428,16 +428,13 @@ Fallback: per-exposure cloud_access object via anonymous HTTPS Range reads; cach
          |
 [Time-domain requests extract cropped HDUs 1 (IMAGE), 2 (FLAGS), 3 (VARIANCE), and 6 (WCS-WAVE); PSF HDU 5 is loaded only by consumers that require it]
          |
-         +--> Extracts cropped HDUs 1 (IMAGE), 2 (FLAGS), 3 (VARIANCE), plus full HDU 5 (PSF) & HDU 6 (WCS-WAVE)
-         |
 [Wavelength-Matched Frame Selection (Pre-Reprojection Filter)]
 Evaluates HDU 6 WAVE-TAB at target native detector coordinates (x_det, y_det).
 Groups exposures dynamically by survey pass boundaries (MJD) AND wavelength window [lambda_0(1-w), lambda_0(1+w)].
 Discards unmatched exposures BEFORE expensive spherical polygon reprojection.
          |
 [Synthetic Source Injection Module (If synth_a or synth_b params provided)]
-Evaluates proper motion displacement for epoch t_k. Uses empirical PSF from HDU 5 to inject
-simulated point-source flux into native HDU 1 and propagated error into HDU 3.
+Uses the explicitly labeled synthetic-injection path. This does not add PSF HDU 5 to live time-domain archive requests.
          |
 [Master Synthetic WCS Header Construction]
 CRVAL1 = ra, CRVAL2 = dec
