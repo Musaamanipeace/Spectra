@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 import uuid
 from typing import Any
@@ -43,6 +44,7 @@ except ImportError:
     from science.wave_match import filter_wavelength_matched_exposures  # type: ignore
 
 router = APIRouter(prefix="/api", tags=["cutout"])
+logger = logging.getLogger(__name__)
 
 # Bounded task queue (depth 5, 503 if full)
 cutout_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=5)
@@ -52,6 +54,7 @@ tensor_cache = LRUCache()
 task_states: dict[str, dict[str, Any]] = {}
 _worker_started = False
 _worker_lock = asyncio.Lock()
+_worker_task: asyncio.Task[None] | None = None
 
 
 def _new_task_id() -> str:
@@ -110,10 +113,10 @@ async def _enqueue_cutout_task(
 
 
 async def _ensure_worker() -> None:
-    global _worker_started
+    global _worker_started, _worker_task
     async with _worker_lock:
-        if not _worker_started:
-            asyncio.create_task(_queue_worker())
+        if _worker_task is None or _worker_task.done():
+            _worker_task = asyncio.create_task(_queue_worker())
             _worker_started = True
 
 
@@ -122,6 +125,12 @@ async def _queue_worker() -> None:
         task = await cutout_queue.get()
         try:
             await process_cutout_task(task)
+        except Exception as exc:
+            task_id = str(task.get("task_id", "unknown"))
+            task_states.setdefault(task_id, {}).update(
+                {"status": "error", "progress": 0.0, "stage": "error", "message": str(exc)}
+            )
+            logger.exception("Cutout worker failed for task %s", task_id)
         finally:
             cutout_queue.task_done()
 
@@ -307,6 +316,7 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                             "epoch": str(exposure["epoch"]),
                             "mjd": float(exposure["mjd"]),
                             "exposure_id": str(exposure["exposure_id"]),
+                            "collection": exposure.get("collection"),
                         }
                     )
 
@@ -319,7 +329,16 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                         reproj_list = reproject_exposures_sync(
                             matched_res.matched_exposures, master_wcs, shape_out
                         )
-                        collection = str(ingest_res.get("collection") or "spherex_qr3")
+                        contributing_collections = sorted(
+                            {
+                                str(exposure["collection"])
+                                for exposure in matched_res.matched_exposures
+                                if exposure.get("collection")
+                            }
+                        )
+                        collection = " + ".join(contributing_collections) or str(
+                            ingest_res.get("collection") or "spherex_qr2"
+                        )
                         coadd_res = coadd_inverse_variance(
                             reproj_list,
                             master_wcs=master_wcs,
@@ -334,7 +353,7 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                         payload = coadd_res.to_bytes(compression="none")
                         await tensor_cache.set(f"tensor:{task_id}", payload, coadd_res.metadata)
                         loaded_live_irsa = True
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 live_error = str(exc)
                 logger.exception("Live IRSA cutout processing failed for task %s", task_id)
                 loaded_live_irsa = False
