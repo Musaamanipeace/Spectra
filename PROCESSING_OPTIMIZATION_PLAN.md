@@ -10,14 +10,14 @@
 - For a QR3 object with coverage, the S3 fallback returned the required FITS HDUs. A single 1 MiB Range request took about 15 seconds in this development environment. This is one data point, not a service-wide throughput estimate.
 - IRSA uses at most two attempts within a shared 45-second deadline, then attempts S3. S3 range reads have a 60-second deadline after the initial range probe. A synchronous range-read thread cannot be forcibly stopped immediately when its awaiting coroutine is cancelled.
 - An archive semaphore caps concurrent operations at four across both task workers. Reprojection runs off the event loop with at most two concurrent thread calls.
-- Queue wait, stage durations, SIA duration/rows, selected exposure counts, and per-exposure source/duration are logged. Separate S3 range counts/bytes, wavelength-match counts, and coaddition timing are not yet logged.
+- Queue wait/depth, stage durations, SIA duration/rows, selected exposure counts, IRSA attempt status/bytes/duration, S3 range count/bytes/cache hits/duration, wavelength matches, and per-exposure outcomes are logged. Metrics are not yet persisted as a benchmark dataset, and fallback bytes are not split by HDU.
 - Progress now changes as work reaches each real stage and advances per fetched exposure. The configured cache paths have not yet been measured for hit rate or cold/warm latency.
 
 ## Recommended order
 
 ### 1. Measure actual task cost
 
-Add structured durations and counts for queue wait, SIA by release, SIA row count, selected exposures by release, each IRSA attempt, fallback bytes/ranges per HDU, wavelength filtering, reprojection, coaddition, and packaging. Update progress only when the corresponding stage starts and finishes. Collect at least 20 cold and 20 warm runs for Barnard's Star, WISE 0855, and a no-coverage coordinate.
+Use the emitted durations and counts for queue wait, SIA by release, SIA rows, selected exposures by release, IRSA attempts, S3 range traffic, wavelength filtering, reprojection, coaddition, and packaging. Add persistent benchmark capture and per-HDU byte accounting. Collect at least 20 cold and 20 warm runs for Barnard's Star, WISE 0855, and a no-coverage coordinate.
 
 ### 2. Remove repeated work
 
