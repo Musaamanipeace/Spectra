@@ -2,7 +2,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 [![Target Mission: NASA SPHEREx](https://img.shields.io/badge/Mission-NASA%20SPHEREx-red.svg)](https://spherex.caltech.edu/)
-[![Archive: NASA IRSA QR2](https://img.shields.io/badge/Archive-IRSA%20SPHEREx%20QR2-orange.svg)](https://irsa.ipac.caltech.edu/Missions/spherex.html)
+[![Archive: NASA IRSA SPHEREx QR2 and QR3](https://img.shields.io/badge/Archive-IRSA%20SPHEREx%20QR2%20%2F%20QR3-orange.svg)](https://irsa.ipac.caltech.edu/Missions/spherex.html)
 [![Backend: FastAPI + uv](https://img.shields.io/badge/Backend-FastAPI%20%2B%20uv-009688.svg)](backend/)
 [![Database: Supabase Postgres](https://img.shields.io/badge/Database-Supabase%20Postgres-3ECF8E.svg)](https://supabase.com)
 [![Frontend: React 18 + WebGL2](https://img.shields.io/badge/Frontend-React%2018%20%2B%20WebGL2%20%2B%20Aladin-61DAFB.svg)](web-client/)
@@ -17,7 +17,7 @@
 
 **Spectra** is an open-source time-domain blink comparator and 102-channel spectrophotometric exploration workbench built for the **NASA Space Apps Challenge: "Display images of the sky from the SPHEREx mission, making it easy for anyone to quickly see how they change over time."**
 
-> **Data Provenance & Simulation Transparency:** Spectra connects directly to the NASA/IPAC Infrared Science Archive (**IRSA SIA2 & Cutout APIs**, `spherex_qr2` collection) for live multi-extension FITS (`MEF`) ingestion, wavelength-matched co-addition, and `WCS-WAVE` spectral extraction. When running offline or inspecting multi-epoch survey projections beyond currently released single-pass QR2 pointings, pre-cached benchmark bundles and fallback cutouts use a physically calibrated instrument simulation model (zodiacal background, Box-Muller read/photon noise, and Spike S2 exposure depth matrices) and display a persistent **`SIMULATED DATA`** canvas watermark and `[Benchmark Model (Simulated)]` / `[Simulated Fallback (Offline)]` provenance badge so simulated pixels are never mistaken for live telescope telemetry.
+> **Data Provenance & Simulation Transparency:** Spectra queries the NASA/IPAC Infrared Science Archive through IRSA SIA2 and its Cutout API. The time-domain viewer uses `IRSA_COLLECTION` (default `spherex_qr3`; set `spherex_qr2` to use QR2), constructs passes from returned exposure MJDs, and renders only verified archive cutouts. If the selected release returns no usable data, it shows an unavailable state instead of simulated pixels. The checked-in benchmark `.f32` bundles remain simulated fixtures and are not used by the time-domain viewer.
 
 NASA's SPHEREx satellite (launched in early 2025) maps the entire sky every six months across **102 near-infrared spectral channels** ($0.75\,\mu\text{m} - 5.00\,\mu\text{m}$) at a native spatial resolution of $\approx 6.2''/\text{pixel}$, observing over a billion astronomical objects across four full all-sky passes and $>50$ deep-field passes over the ecliptic poles.
 
@@ -190,7 +190,7 @@ Implementation is structured into **four strictly sequential, priority-gated pha
 ## 9. Scientific Data Acknowledgement & Citations
 
 This platform utilizes data products from the **NASA SPHEREx** mission:
-- **Primary Archive:** NASA/IPAC Infrared Science Archive (IRSA), SPHEREx Quick Release 2 (`spherex_qr2`, configurable via `IRSA_COLLECTION`).
+- **Primary Archive:** NASA/IPAC Infrared Science Archive (IRSA), SPHEREx Quick Release 3 by default (`spherex_qr3`); set `IRSA_COLLECTION=spherex_qr2` to select QR2.
 - **Archive Documentation:** [IRSA SPHEREx Mission Portal](https://irsa.ipac.caltech.edu/Missions/spherex.html) & [SPLICES Ice Catalog](https://irsa.ipac.caltech.edu/data/SPHEREx/SPLICES/)
 - **External Catalogs:** European Space Agency (ESA) Gaia DR3, NASA/IPAC Wide-field Infrared Survey Explorer (AllWISE), Pan-STARRS1 Surveys (STScI).
 - **Sky Engine:** Aladin Lite v3 (developed by CDS, Observatoire Astronomique de Strasbourg, France; licensed under GNU GPL-3.0).
