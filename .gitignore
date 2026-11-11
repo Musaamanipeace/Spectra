@@ -8,3 +8,6 @@ __pycache__/
 node_modules/
 dist/
 .vite/
+concept/
+supabase/.temp/
+supabase/.branches/

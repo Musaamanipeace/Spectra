@@ -63,6 +63,7 @@ tasks:
         echo "  task test          Run full test suite (backend pytest + frontend build)"
         echo "  task lint          Run Ruff check & TypeScript compilation check"
         echo ""
+        export PATH="$HOME/.local/bin:$PATH"
         if ! command -v supabase >/dev/null 2>&1; then
           echo "Notice: Local Supabase CLI not installed (not required for standard dev)."
           echo "        FastAPI backend runs with cloud session pooler / offline fallback."
@@ -73,6 +74,7 @@ tasks:
     desc: "Start local Supabase Postgres and apply schema + benchmark seeds (optional)"
     cmds:
       - |
+        export PATH="$HOME/.local/bin:$PATH"
         if command -v supabase >/dev/null 2>&1 && command -v psql >/dev/null 2>&1; then
           supabase start
           psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -f backend/db/schema.sql

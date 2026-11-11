@@ -6,7 +6,7 @@ CREATE EXTENSION IF NOT EXISTS earthdistance;
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 0. Heartbeat Table for Container & IRSA Connectivity Telemetry
-CREATE TABLE heartbeat (
+CREATE TABLE IF NOT EXISTS heartbeat (
     id INT PRIMARY KEY DEFAULT 1,
     last_ping TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     irsa_status TEXT NOT NULL DEFAULT 'operational',
@@ -18,7 +18,7 @@ VALUES (1, NOW(), 'operational', 1)
 ON CONFLICT (id) DO NOTHING;
 
 -- 1. Sky Subjects (Pre-seeded Benchmarks + Active-Learning Queue + On-Demand Cache)
-CREATE TABLE subjects (
+CREATE TABLE IF NOT EXISTS subjects (
     subject_id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
     category TEXT NOT NULL,
@@ -44,11 +44,11 @@ CREATE TABLE subjects (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_subjects_spatial ON subjects (ra, dec);
-CREATE INDEX idx_subjects_priority ON subjects (recommended_tab, shannon_entropy DESC, ai_anomaly_score DESC);
+CREATE INDEX IF NOT EXISTS idx_subjects_spatial ON subjects (ra, dec);
+CREATE INDEX IF NOT EXISTS idx_subjects_priority ON subjects (recommended_tab, shannon_entropy DESC, ai_anomaly_score DESC);
 
 -- 2. Observer Profiles (Zero-Auth Cryptographic Session Fingerprinting)
-CREATE TABLE observers (
+CREATE TABLE IF NOT EXISTS observers (
     id BIGSERIAL PRIMARY KEY,
     observer_id UUID UNIQUE NOT NULL,
     key_hash TEXT NOT NULL,
@@ -61,7 +61,7 @@ CREATE TABLE observers (
 );
 
 -- 3. Structured Classifications (Feeds Active-Learning & Consensus Engine)
-CREATE TABLE classifications (
+CREATE TABLE IF NOT EXISTS classifications (
     id BIGSERIAL PRIMARY KEY,
     subject_id TEXT NOT NULL REFERENCES subjects(subject_id) ON DELETE CASCADE,
     observer_id UUID NOT NULL REFERENCES observers(observer_id) ON DELETE CASCADE,
@@ -75,11 +75,11 @@ CREATE TABLE classifications (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_classifications_subject ON classifications(subject_id);
-CREATE INDEX idx_classifications_observer ON classifications(observer_id);
+CREATE INDEX IF NOT EXISTS idx_classifications_subject ON classifications(subject_id);
+CREATE INDEX IF NOT EXISTS idx_classifications_observer ON classifications(observer_id);
 
 -- 4. Observation Discussion Threads (Tab 5 Public Feed)
-CREATE TABLE discussion_threads (
+CREATE TABLE IF NOT EXISTS discussion_threads (
     thread_id BIGSERIAL PRIMARY KEY,
     subject_id TEXT REFERENCES subjects(subject_id) ON DELETE SET NULL,
     author_id UUID NOT NULL REFERENCES observers(observer_id) ON DELETE CASCADE,
@@ -99,11 +99,11 @@ CREATE TABLE discussion_threads (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_threads_channel ON discussion_threads(channel);
-CREATE INDEX idx_threads_coords ON discussion_threads(ra, dec);
+CREATE INDEX IF NOT EXISTS idx_threads_channel ON discussion_threads(channel);
+CREATE INDEX IF NOT EXISTS idx_threads_coords ON discussion_threads(ra, dec);
 
 -- 5. Discussion Replies
-CREATE TABLE discussion_replies (
+CREATE TABLE IF NOT EXISTS discussion_replies (
     reply_id BIGSERIAL PRIMARY KEY,
     thread_id BIGINT NOT NULL REFERENCES discussion_threads(thread_id) ON DELETE CASCADE,
     author_id UUID NOT NULL REFERENCES observers(observer_id) ON DELETE CASCADE,
@@ -113,10 +113,10 @@ CREATE TABLE discussion_replies (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX idx_replies_thread ON discussion_replies(thread_id);
+CREATE INDEX IF NOT EXISTS idx_replies_thread ON discussion_replies(thread_id);
 
 -- 6. Admin Model Training Runs (Persists Training History for /admin Tabs 1, 2, 3)
-CREATE TABLE ml_training_runs (
+CREATE TABLE IF NOT EXISTS ml_training_runs (
     run_id TEXT PRIMARY KEY,
     model_architecture TEXT NOT NULL,
     hyperparameters JSONB NOT NULL,
