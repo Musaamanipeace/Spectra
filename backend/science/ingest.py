@@ -104,7 +104,7 @@ async def query_sia2_cone(
     }
     params.update(kwargs)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
+    async with httpx.AsyncClient(timeout=60.0) as client:
         try:
             response = await client.get(SIA2_ENDPOINT, params=params)
             if response.status_code != 200:
@@ -308,34 +308,54 @@ async def fetch_cutout_from_irsa(
     # IRSA Cutout Service endpoint
     cutout_url = f"{data_url}?center={ra},{dec}&size={size_deg}"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        try:
-            response = await client.get(cutout_url)
-            if response.status_code != 200:
+    async with httpx.AsyncClient(timeout=45.0) as client:
+        for attempt in range(2):
+            try:
+                response = await client.get(cutout_url)
+                if response.status_code != 200:
+                    logger.warning(
+                        "IRSA Cutout returned HTTP %s for collection=%s: %s",
+                        response.status_code,
+                        collection,
+                        cutout_url,
+                    )
+                    if response.status_code not in {429, 500, 502, 503, 504} or attempt:
+                        return {}
+                else:
+                    cutout_data = _parse_irsa_mef_cutout(
+                        response.content, collection=collection
+                    )
+                    required_hdus = (
+                        "hdu1_image",
+                        "hdu1_header",
+                        "hdu2_flags",
+                        "hdu3_variance",
+                        "hdu6_wave_tab",
+                    )
+                    if all(cutout_data.get(key) is not None for key in required_hdus):
+                        if adaptive_window:
+                            cutout_data = _apply_adaptive_wavelength_window(
+                                cutout_data, window_half_width
+                            )
+                        return cutout_data
+                    logger.warning(
+                        "Incomplete IRSA MEF cutout for collection=%s (attempt %s/2)",
+                        collection,
+                        attempt + 1,
+                    )
+                    if attempt:
+                        return {}
+            except (httpx.HTTPError, OSError, ValueError) as exc:
                 logger.warning(
-                    f"IRSA Cutout returned HTTP {response.status_code}: {cutout_url}"
+                    "IRSA Cutout request failed for collection=%s (attempt %s/2): %s",
+                    collection,
+                    attempt + 1,
+                    exc,
                 )
-                return {}
-
-            # IRSA returns complete MEF structure with all 6 HDUs
-            # Parse the FITS MEF structure
-            # In production, use astropy.io.fits with fsspec
-            cutout_data = _parse_irsa_mef_cutout(response.content, collection=collection)
-
-            # Apply adaptive wavelength window if requested
-            if adaptive_window and "hdu6_wave_tab" in cutout_data:
-                cutout_data = _apply_adaptive_wavelength_window(
-                    cutout_data, window_half_width
-                )
-
-            return cutout_data
-
-        except httpx.TimeoutException:
-            logger.error(f"IRSA Cutout timeout for RA={ra}, Dec={dec}")
-            return {}
-        except (httpx.HTTPError, OSError, ValueError) as e:
-            logger.error(f"IRSA Cutout error: {e}")
-            return {}
+                if attempt:
+                    return {}
+            await asyncio.sleep(0.5)
+    return {}
 
 
 def _parse_irsa_mef_cutout(fits_data: bytes, collection: str) -> dict[str, Any]:
