@@ -11,7 +11,6 @@ import asyncio
 import json
 import time
 import uuid
-from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -30,7 +29,6 @@ try:
         encode_binary_tensor,
         reproject_exposures_sync,
     )
-    from backend.science.wave import match_benchmark_target
     from backend.science.wave_match import filter_wavelength_matched_exposures
 except ImportError:
     from cache.lru import LRUCache  # type: ignore
@@ -42,7 +40,6 @@ except ImportError:
         encode_binary_tensor,
         reproject_exposures_sync,
     )
-    from science.wave import match_benchmark_target  # type: ignore
     from science.wave_match import filter_wavelength_matched_exposures  # type: ignore
 
 router = APIRouter(prefix="/api", tags=["cutout"])
@@ -250,7 +247,7 @@ def _pack_plane(flux, variance, flags, n_exp) -> bytes:
 
 
 async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
-    """Process a single cutout task: benchmark cache -> live IRSA SIA2/MEF -> calibrated fallback."""
+    """Process an IRSA release query into a real tensor or return an explicit error."""
     task_id = task_data["task_id"]
     ra = float(task_data["ra"])
     dec = float(task_data["dec"])
@@ -270,118 +267,89 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
             )
             await asyncio.sleep(0.01)
 
-        matched = match_benchmark_target(ra, dec, match_radius_arcsec=60.0)
-
-        # 1. Check for precomputed NASA benchmark file
-        loaded_precomputed = False
-        if matched and not (task_data.get("synth_a") or task_data.get("synth_b")):
-            base_slug = matched.get("name", "").lower().replace("'", "").replace(" ", "_").replace("-", "_")
-            search_names = [base_slug, matched.get("name", "").lower(), matched.get("name", "")]
-            alias_map = {
-                "barnards_star": "barnard",
-                "wise_0855_0714": "wise0855",
-                "wise_0855": "wise0855",
-                "epsilon_indi_b": "eps_indi_b",
-                "rw_aurigae": "rw_aur",
-                "r_draconis": "r_dra",
-            }
-            if base_slug in alias_map:
-                search_names.append(alias_map[base_slug])
-
-            for sname in search_names:
-                for base_dir in [
-                    Path("web-client/public/benchmarks"),
-                    Path("../web-client/public/benchmarks"),
-                    Path("benchmarks"),
-                    Path("../benchmarks"),
-                ]:
-                    cand = base_dir / f"{sname}.f32"
-                    if cand.is_file():
-                        raw_bytes = cand.read_bytes()
-                        if len(raw_bytes) >= 4:
-                            hl = int.from_bytes(raw_bytes[:4], "little")
-                            if len(raw_bytes) >= 4 + hl:
-                                parsed_hdr = json.loads(raw_bytes[4 : 4 + hl].decode("utf-8"))
-                                await tensor_cache.set(f"tensor:{task_id}", raw_bytes, parsed_hdr)
-                                loaded_precomputed = True
-                                break
-                if loaded_precomputed:
-                    break
-
-        # 2. Attempt live IRSA SIA2 exposure discovery + cutout reprojection when not precomputed
+        # Load the requested IRSA release and build epochs from its actual exposures.
         loaded_live_irsa = False
-        if not loaded_precomputed and not (task_data.get("synth_a") or task_data.get("synth_b")):
+        live_error = None
+        if not (task_data.get("synth_a") or task_data.get("synth_b")):
             try:
-                ingest_res = await asyncio.wait_for(
-                    ingest_exposures_for_target(
-                        ra=ra,
-                        dec=dec,
-                        fov_arcsec=fov_arcsec,
-                        adaptive_window=adaptive_window,
-                    ),
-                    timeout=8.0,
+                ingest_res = await ingest_exposures_for_target(
+                    ra=ra,
+                    dec=dec,
+                    fov_arcsec=fov_arcsec,
+                    adaptive_window=adaptive_window,
                 )
-                cutout_mef = ingest_res.get("cutout") or {}
-                if (
-                    ingest_res.get("status") == "complete"
-                    and cutout_mef.get("hdu1_image") is not None
-                    and cutout_mef.get("hdu1_header") is not None
-                ):
-                    img = cutout_mef["hdu1_image"]
-                    var = (
-                        cutout_mef["hdu3_variance"]
-                        if cutout_mef.get("hdu3_variance") is not None
-                        else np.full_like(img, 0.04, dtype=np.float32)
-                    )
-                    flg = (
-                        cutout_mef["hdu2_flags"]
-                        if cutout_mef.get("hdu2_flags") is not None
-                        else np.zeros_like(img, dtype=np.uint32)
-                    )
-                    if task_data.get("zodi_subtracted") and cutout_mef.get("hdu4_zodi") is not None:
-                        img = img - cutout_mef["hdu4_zodi"]
-
-                    sia2_q = ingest_res.get("sia2_query") or {}
-                    exp_id = str((sia2_q.get("exposure_ids") or ["spx_live_01"])[0])
-                    exp_mjd = float((sia2_q.get("mjds") or [60810.4])[0] or 60810.4)
-                    exp_band = str((sia2_q.get("detector_ids") or ["D1"])[0] or "D1")
-
-                    candidate_exps = [
+                candidate_exps = []
+                for exposure in ingest_res.get("exposures", []):
+                    cutout_mef = exposure.get("cutout") or {}
+                    img = cutout_mef.get("hdu1_image")
+                    header = cutout_mef.get("hdu1_header")
+                    band = str(exposure.get("band") or "UNKNOWN").upper()
+                    variance = cutout_mef.get("hdu3_variance")
+                    flags = cutout_mef.get("hdu2_flags")
+                    wave_tab = cutout_mef.get("hdu6_wave_tab")
+                    if (
+                        img is None
+                        or header is None
+                        or variance is None
+                        or flags is None
+                        or wave_tab is None
+                        or band not in {f"D{i}" for i in range(1, 7)}
+                    ):
+                        continue
+                    candidate_exps.append(
                         {
                             "flux": img,
-                            "variance": var,
-                            "flags": flg,
-                            "cutout_header": cutout_mef["hdu1_header"],
-                            "wave_tab": cutout_mef.get("hdu6_wave_tab"),
-                            "band": exp_band,
-                            "epoch": "pass_01",
-                            "mjd": exp_mjd,
-                            "exposure_id": exp_id,
+                            "variance": variance,
+                            "flags": flags,
+                            "cutout_header": header,
+                            "wave_tab": wave_tab,
+                            "band": band,
+                            "epoch": str(exposure["epoch"]),
+                            "mjd": float(exposure["mjd"]),
+                            "exposure_id": str(exposure["exposure_id"]),
                         }
-                    ]
+                    )
+
+                if candidate_exps:
                     matched_res = filter_wavelength_matched_exposures(
                         candidate_exps, ra=ra, dec=dec, adaptive_window=adaptive_window
                     )
-                    exps_to_reproj = matched_res.matched_exposures or candidate_exps
-                    master_wcs, _, shape_out = build_master_wcs(ra, dec, min(fov_arcsec, 180))
-                    reproj_list = reproject_exposures_sync(exps_to_reproj, master_wcs, shape_out)
-                    coadd_res = coadd_inverse_variance(
-                        reproj_list,
-                        master_wcs=master_wcs,
-                        shape_out=shape_out,
-                        source_badge="[IRSA Live (spherex_qr2)]",
-                        release="spherex_qr2",
-                        fill_unobserved=0.0,
-                    )
-                    coadd_res.metadata["is_simulated"] = False
-                    payload = coadd_res.to_bytes(compression="none")
-                    await tensor_cache.set(f"tensor:{task_id}", payload, coadd_res.metadata)
-                    loaded_live_irsa = True
-            except Exception:  # noqa: BLE001
+                    if matched_res.matched_exposures:
+                        master_wcs, _, shape_out = build_master_wcs(ra, dec, min(fov_arcsec, 180))
+                        reproj_list = reproject_exposures_sync(
+                            matched_res.matched_exposures, master_wcs, shape_out
+                        )
+                        collection = str(ingest_res.get("collection") or "spherex_qr3")
+                        coadd_res = coadd_inverse_variance(
+                            reproj_list,
+                            master_wcs=master_wcs,
+                            shape_out=shape_out,
+                            source_badge=f"[IRSA Live ({collection})]",
+                            release=collection,
+                            fill_unobserved=np.nan,
+                        )
+                        coadd_res.metadata["is_simulated"] = False
+                        coadd_res.metadata["source_badge"] = f"[IRSA Live ({collection})]"
+                        coadd_res.metadata["exposure_count"] = len(reproj_list)
+                        payload = coadd_res.to_bytes(compression="none")
+                        await tensor_cache.set(f"tensor:{task_id}", payload, coadd_res.metadata)
+                        loaded_live_irsa = True
+            except Exception as exc:  # noqa: BLE001
+                live_error = str(exc)
+                logger.exception("Live IRSA cutout processing failed for task %s", task_id)
                 loaded_live_irsa = False
 
-        # 3. Calibrated simulation / synthetic injection fallback (honestly labeled)
-        if not loaded_precomputed and not loaded_live_irsa:
+        if not loaded_live_irsa and not (task_data.get("synth_a") or task_data.get("synth_b")):
+            message = live_error or (ingest_res.get("error") if "ingest_res" in locals() else None) or (
+                "No usable exposures were returned by the selected IRSA release"
+            )
+            task_states[task_id].update(
+                {"status": "error", "progress": 0.0, "stage": "error", "message": message}
+            )
+            return {"task_id": task_id, "status": "error", "message": message}
+
+        # Explicit synthetic injection requests remain available as a labeled demo mode.
+        if task_data.get("synth_a") or task_data.get("synth_b"):
             n_epochs, n_bands, h, w = 2, 6, 29, 29
             rng = np.random.default_rng(abs(int(ra * 1000 + dec * 1000)) % (2**31 - 1) or 42)
             # Zodiacal background + read noise per band D1..D6
@@ -435,7 +403,7 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                     [[61091.72, 61237.87] for _ in range(n_bands)],
                 ],
                 "exposure_ids": [f"sim_pass{e+1}_d{b+1}" for e in range(n_epochs) for b in range(n_bands)],
-                "release": "spherex_qr2",
+                "release": "synthetic",
                 "source_badge": source_badge,
                 "is_simulated": True,
                 "compression": "none",
