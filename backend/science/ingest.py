@@ -6,9 +6,11 @@ including HDU 4 ZODI background model) from IRSA Cutout Service (primary) with
 anonymous S3 byte-range slicing (fsspec) as fallback. Parse LTV1/LTV2 sub-array
 WCS offsets.
 """
+import asyncio
 import io
 import json
 import logging
+import os
 import re
 import xml.etree.ElementTree as ET
 from pathlib import Path
@@ -48,7 +50,9 @@ logger = logging.getLogger(__name__)
 
 # IRSA SIA2 Endpoint configuration
 SIA2_ENDPOINT = "https://irsa.ipac.caltech.edu/SIA"
-DEFAULT_COLLECTION = "spherex_qr2"
+DEFAULT_COLLECTION = os.getenv("IRSA_COLLECTION", "spherex_qr3").strip().lower()
+if DEFAULT_COLLECTION not in {"spherex_qr2", "spherex_qr3"}:
+    raise ValueError("IRSA_COLLECTION must be spherex_qr2 or spherex_qr3")
 DEFAULT_RADIUS_DEG = 0.5  # 30 arcmin default
 
 
@@ -150,8 +154,21 @@ def _parse_sia2_votable(votable_text: str, collection: str) -> dict[str, Any]:
                 access_url = _col(tds, "access_url") or ""
                 if not obs_id and not access_url:
                     continue
-                band = _normalize_band_name(_col(tds, "energy_bandpassname")) or _normalize_band_name(
-                    _col(tds, "instrument_name")
+                band = next(
+                    (
+                        value
+                        for value in (
+                            _normalize_band_name(_col(tds, "energy_bandpassname")),
+                            _normalize_band_name(_col(tds, "band")),
+                            _normalize_band_name(_col(tds, "band_name")),
+                            _normalize_band_name(_col(tds, "obs_title")),
+                            _normalize_band_name(_col(tds, "instrument_name")),
+                            _normalize_band_name(access_url),
+                            _normalize_band_name(obs_id),
+                        )
+                        if value
+                    ),
+                    None,
                 )
                 t_min_raw = _col(tds, "t_min")
                 mjd_val: float | None = None
@@ -165,7 +182,7 @@ def _parse_sia2_votable(votable_text: str, collection: str) -> dict[str, Any]:
 
                 result["exposure_ids"].append(obs_id)
                 result["mjds"].append(mjd_val)
-                result["detector_ids"].append(band or "D1")
+                result["detector_ids"].append(band or "UNKNOWN")
                 result["footprints"].append(s_region)
                 result["access_urls"].append(access_url)
                 if s3_uri:
@@ -253,6 +270,7 @@ async def fetch_cutout_from_irsa(
     bands: list[int] | None = None,
     adaptive_window: bool = False,
     window_half_width: float = 1.0 / 41.0,  # 1/R_b for D1-D3
+    collection: str = DEFAULT_COLLECTION,
 ) -> dict[str, Any]:
     """Fetch server-side MEF cutout from IRSA Cutout Service.
 
@@ -286,7 +304,7 @@ async def fetch_cutout_from_irsa(
             # IRSA returns complete MEF structure with all 6 HDUs
             # Parse the FITS MEF structure
             # In production, use astropy.io.fits with fsspec
-            cutout_data = _parse_irsa_mef_cutout(response.content, collection="qr2")
+            cutout_data = _parse_irsa_mef_cutout(response.content, collection=collection)
 
             # Apply adaptive wavelength window if requested
             if adaptive_window and "hdu6_wave_tab" in cutout_data:
@@ -444,11 +462,13 @@ async def ingest_exposures_for_target(
     SPECIFICATION.md §3.1, §4.1: Complete ingestion driver.
     """
     result: dict[str, Any] = {
+        "collection": collection,
         "ra": ra,
         "dec": dec,
         "fov_arcsec": fov_arcsec,
         "sia2_query": None,
         "grouped_exposures": {},
+        "exposures": [],
         "cutout": None,
         "ltv_offsets": (None, None),
         "status": "starting",
@@ -470,29 +490,82 @@ async def ingest_exposures_for_target(
             result["status"] = "no_exposures"
             return result
 
-        # Step 2: Group by survey pass
-        logger.info(f"Found {len(sia2_result.get('exposure_ids', []))} exposures, grouping by survey pass")
-        grouped = await group_exposures_by_survey_pass(
-            _format_exposures_for_grouping(sia2_result)
-        )
+        # Step 2: Cluster the exposures returned for this coordinate. QR2 and
+        # QR3 have different release coverage, so static release-date windows
+        # cannot be used as the source of the target's epochs.
+        exposures = _format_exposures_for_grouping(sia2_result)
+        gap_days = 30.0
+        try:
+            config_path = Path(__file__).resolve().parent.parent / "config" / "survey_passes.json"
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+            gap_days = float(config.get("clustering", {}).get("gap_days_threshold", gap_days))
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            pass
+        exposures = [exp for exp in exposures if exp.get("mjd") is not None and exp.get("access_url")]
+        exposures.sort(key=lambda exp: float(exp["mjd"]))
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        previous_mjd: float | None = None
+        epoch_index = 0
+        for exposure in exposures:
+            mjd = float(exposure["mjd"])
+            if previous_mjd is not None and mjd - previous_mjd > gap_days:
+                epoch_index += 1
+            epoch = f"pass_{epoch_index + 1:02d}"
+            exposure["epoch"] = epoch
+            grouped.setdefault(epoch, []).append(exposure)
+            previous_mjd = mjd
+
+        # Fetch one real exposure nearest the temporal median for each pass and
+        # detector. This keeps a coordinate request bounded while preserving
+        # actual release epochs and detector provenance in the tensor.
+        selected: list[dict[str, Any]] = []
+        for pass_exposures in grouped.values():
+            bands_for_pass: dict[str, list[dict[str, Any]]] = {}
+            for exposure in pass_exposures:
+                band = str(exposure.get("band") or "UNKNOWN").upper()
+                if band in {f"D{i}" for i in range(1, 7)}:
+                    bands_for_pass.setdefault(band, []).append(exposure)
+            for band_exposures in bands_for_pass.values():
+                median_mjd = float(np.median([float(exp["mjd"]) for exp in band_exposures]))
+                selected.append(min(band_exposures, key=lambda exp: abs(float(exp["mjd"]) - median_mjd)))
+
+        if not selected:
+            result["error"] = "IRSA returned no exposures with a recognized detector band and MJD"
+            result["status"] = "no_usable_exposures"
+            return result
+
         result["grouped_exposures"] = grouped
         result["status"] = "grouped"
 
-        # Step 3: Fetch cutout from IRSA (primary path)
-        if sia2_result.get("access_urls"):
-            data_url = sia2_result["access_urls"][0]
-            logger.info(f"Fetching IRSA cutout from: {data_url}")
-            cutout = await fetch_cutout_from_irsa(
-                data_url, ra, dec, fov_arcsec / 3600.0, bands=bands,
-                adaptive_window=adaptive_window,
-            )
-            result["cutout"] = cutout
-            result["status"] = "cutout_fetched"
+        # Step 3: Fetch actual MEF cutouts from IRSA for selected pass/band pairs.
+        semaphore = asyncio.Semaphore(4)
 
-        # Step 4: Parse LTV1/LTV2 offsets
-        if result["cutout"]:
-            ltv1, ltv2 = await parse_ltv1_ltv2_offsets(result["cutout"])
-            result["ltv_offsets"] = (ltv1, ltv2)
+        async def fetch_exposure(exposure: dict[str, Any]) -> dict[str, Any] | None:
+            async with semaphore:
+                cutout = await fetch_cutout_from_irsa(
+                    str(exposure["access_url"]),
+                    ra,
+                    dec,
+                    fov_arcsec / 3600.0,
+                    bands=bands,
+                    adaptive_window=adaptive_window,
+                    collection=collection,
+                )
+            if cutout.get("hdu1_image") is None or cutout.get("hdu1_header") is None:
+                return None
+            exposure["cutout"] = cutout
+            exposure["mjd_range"] = (float(exposure["mjd"]), float(exposure["mjd"]))
+            return exposure
+
+        fetched = await asyncio.gather(*(fetch_exposure(exp) for exp in selected))
+        result["exposures"] = [exp for exp in fetched if exp is not None]
+        if not result["exposures"]:
+            result["error"] = "IRSA cutout service returned no usable MEF images"
+            result["status"] = "no_cutouts"
+            return result
+        result["cutout"] = result["exposures"][0]["cutout"]
+        ltv1, ltv2 = await parse_ltv1_ltv2_offsets(result["cutout"])
+        result["ltv_offsets"] = (ltv1, ltv2)
 
         result["status"] = "complete"
         return result
