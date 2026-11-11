@@ -1,10 +1,10 @@
 # Spectra (SPHEREx Spectral Explorers)
 ## Exhaustive Engineering Architecture, Scientific Pipeline & Systems Specification
-**Document Version:** 3.0.0-PROD  
-**Target Mission:** NASA SPHEREx (Spectro-Photometer for the History of the Universe, Epoch of Reionization and Ices Explorer)  
-**Primary Archive:** NASA/IPAC Infrared Science Archive (IRSA) — SPHEREx Quick Release 2 (`spherex_qr2` / prefix `qr2/`) with runtime config `IRSA_COLLECTION`  
-**System Repository:** `Spectra`  
-**Status:** Unified Specification (v2.5.0 Architectural Rigor + v3.0.0 Ground-Truth & Astrophysical Corrections)  
+**Document Version:** 3.1.0-PERFORMANCE-REVISION
+**Target Mission:** NASA SPHEREx (Spectro-Photometer for the History of the Universe, Epoch of Reionization and Ices Explorer)
+**Primary Archive:** NASA/IPAC Infrared Science Archive (IRSA) — SPHEREx Quick Release 2 and 3 (`spherex_qr2`, `spherex_qr3`) with per-exposure SIA coverage and anonymous HTTPS Range fallback
+**System Repository:** `Spectra`
+**Status:** Unified Specification with v3.0 ground-truth corrections and v3.1 processing-performance revision
 **Tags Used Throughout:** `[V]` checked against IRSA documentation, `[D]` recomputed in this revision, `[?]` must be verified against real data or SPHEREx Explanatory Supplement before dependent logic is built.
 
 ---
@@ -31,6 +31,7 @@ The scientific problem addressed by this platform stems from a fundamental diver
 6. **Integration of Citizen Science Infrastructure:** Full integration of Talk-style discussion boards, peer-review channels, volunteer calibration sets, and official DOI-linked mission catalog exports.
 7. **Zero-Auth Institutional Quality Pivot:** Dropped blocking authentication screens for hackathon evaluation while retaining clean route separation (`/explore` vs `/admin`). Integrated implicit client telemetry session fingerprinting (`X-Observer-ID`, `X-Observer-Key`), binary Float32 tensor streaming (eliminating 8-bit PNG quantization), `uv` + `ruff`, `openapi-typescript`, `cmdk`, and pre-seeded offline benchmark data products.
 8. **The v3.0 Ground-Truth & Astrophysical Corrections:** Fixed proper motion spherical trigonometry for Epsilon Indi B (added missing $1/\cos \delta$, eliminating a 46″ pointing error), instituted wavelength-matched differencing across survey passes (eliminating spurious dipoles caused by Linear Variable Filters), replaced S3 byte-range thrashing with server-side IRSA cutouts as the primary ingestion path, dropped 408 MB `pgvector` from P0 to protect Supabase free-tier quotas, and consolidated backend operations into a lean single FastAPI service.
+9. **The v3.1 Processing-Performance Revision:** Added duplicate-request coalescing after repeated browser POSTs filled the five-task queue; retained IRSA-first ingestion with QR2/QR3 metadata and S3 fallback; replaced the single active-task assumption with a bounded two-task worker plan, global archive-I/O limits, source-data caching, and stage-level latency measurement. These performance goals are provisional until the benchmark gate in §3.3 is met.
 
 ### 1.3 The 19 Corrective Audits (v2.5 to v3.0 Evolution Log)
 
@@ -276,31 +277,31 @@ flowchart TD
 
 ### 3.1 Task-Based Asynchronous Cutout Pipeline (`POST /api/cutout`)
 
-Because IRSA queries for multiple overlapping Multi-Extension FITS cutouts can take 10–25 seconds during cold queries, synchronous request-response loops risk browser HTTP connection timeouts. Spectra implements an asynchronous **task-based execution model**:
+Because IRSA SIA queries and Multi-Extension FITS cutouts can take seconds to tens of seconds, synchronous request-response loops risk browser HTTP connection timeouts. Spectra uses an asynchronous **task-based execution model**:
 
 ```mermaid
 sequenceDiagram
     participant Client as React Client (nuqs / TanStack)
     participant API as FastAPI Backend (:7860)
-    participant Queue as Heavy Job Manager (Single-Job Lock)
+    participant Queue as Bounded Worker Pool (2 active tasks)
     participant IRSA as NASA/IPAC IRSA Cutout Service
 
     Client->>API: POST /api/cutout { ra, dec, fov_arcsec, bands, adaptive_window }
-    API->>Queue: Enqueue Task in Bounded Queue (asyncio.Queue depth 5 / 503 if full)
+    API->>Queue: Coalesce matching active request or enqueue (5 waiting slots / 503 if full)
     API-->>Client: 202 Accepted { task_id: "task_spx_89f2a", status: "queued" }
     
-    Client->>API: GET /api/cutout/progress/{task_id} (SSE Stream)
-    API->>IRSA: 1. Discover via SIA2 (pyvo)
-    API-->>Client: SSE event { stage: "discovering", progress: 0.15 }
+    Client->>API: GET /api/cutout/progress/{task_id} (JSON polling; SSE may be added later)
+    API->>IRSA: 1. Discover via SIA2 (async httpx)
+    API-->>Client: JSON progress { stage: "discovering", progress: 0.15 }
     
     API->>IRSA: 2. Fetch Server-Side MEF Cutouts (n of m)
-    API-->>Client: SSE event { stage: "fetching", progress: 0.50, message: "Fetched 8/16 cutouts" }
+    API-->>Client: JSON progress { stage: "fetching", progress: 0.50, message: "Fetched 8/16 cutouts" }
     
     API->>API: 3. Reproject (reproject_exact) & Adaptive Wavelength Grouping
-    API-->>Client: SSE event { stage: "reprojecting", progress: 0.85 }
+    API-->>Client: JSON progress { stage: "reprojecting", progress: 0.85 }
     
     API->>API: 4. Inverse-Variance Coaddition per (Epoch, Band)
-    API-->>Client: SSE event { stage: "complete", tensor_url: "/api/cutout/task_spx_89f2a/tensor" }
+    API-->>Client: JSON progress { stage: "complete", tensor_url: "/api/cutout/task_spx_89f2a/tensor" }
     
     Client->>API: GET /api/cutout/task_spx_89f2a/tensor
     API-->>Client: Binary Tensor (application/octet-stream, Little-Endian Float32)
@@ -308,10 +309,10 @@ sequenceDiagram
 
 #### Detailed Pipeline Stages:
 1. **Target Resolution (`GET /api/resolve`):** Resolves target coordinates via decimal degrees, sexagesimal notation, or CDS Sesame name lookups (350 ms debounce).
-2. **SIA2 Query:** Discovers all intersecting exposures via IRSA SIA2 (`COLLECTION=spherex_qr2&POS=circle+<ra>+<dec>+<radius_deg>`), cone padded by the field-of-view diagonal. Returns exposure IDs, observation MJDs, detector IDs, footprints, and cutout URLs.
+2. **SIA2 Query:** Queries `spherex_qr2` and `spherex_qr3` concurrently (`COLLECTION=<release>&POS=circle+<ra>+<dec>+<radius_deg>`), cone padded by the field-of-view diagonal. Preserve per-release exposure IDs, MJDs, detectors, footprints, cutout URLs, and `cloud_access`. An empty result for one release is a valid coverage outcome, not a task failure.
 3. **Dynamic Epoch Grouping:** Groups exposures into survey passes using configured mission survey boundaries (`config/survey_passes.json`), not hardcoded calendar dates.
-4. **Server-Side Cutout Ingestion:** Fetches cutouts of required HDUs (`IMAGE`, `FLAGS`, `VARIANCE`, `WCS-WAVE`, `PSF`) from the IRSA Cutout Service (`<data_url>?center=<ra>,<dec>&size=<deg>`).
-   - *IRSA Cutout Behavior Note:* IRSA's SPHEREx Cutout API preserves the complete Multi-Extension FITS structure, adjusts the WCS keywords for cropped planes, and returns the HDU 5 PSF cube and HDU 6 WAVE-TAB lookup table whole. Because raw full-detector images are $\approx 70\,\text{MB}$ per file (not 16 MB as earlier assumed), IRSA server-side cutouts provide a decisive $\approx 50\times$ bandwidth savings over S3 byte-range slicing.
+4. **Server-Side Cutout Ingestion:** Fetches required time-domain HDUs (`IMAGE`, `FLAGS`, `VARIANCE`, `WCS-WAVE`) from the IRSA Cutout Service (`<data_url>?center=<ra>,<dec>&size=<deg>`), retrying transient or incomplete responses within a per-exposure time budget. On failure, use the exposure's `cloud_access` location with an anonymous HTTPS Range reader. Load PSF HDU 5 only for consumers that require PSF photometry; it is not required to build the Time-Domain Comparator tensor.
+   - *IRSA Cutout Behavior Note:* IRSA cutouts are the primary path. QR3 has returned truncated cutouts in live requests, so validate all required HDUs before accepting a response. S3 fallback is a correctness path and may be substantially slower because the PSF and WCS-WAVE FITS extensions can be large. Cache reusable archive metadata and extension bytes by object identity/ETag; do not fetch optional PSF data for time-domain-only requests.
    - *IRSA Custom Mosaic Check:* Day-0 Spike S1 checks whether the IRSA Custom Mosaic service is available as a shortcut for single-wavelength mosaics.
 5. **Adaptive Wavelength Window Selection:** Evaluates the HDU 6 `WAVE-TAB` at every pixel in the cutout to compute exact central wavelength $\lambda(x, y)$ and bandpass width $\Delta\lambda(x, y)$.
    - *Adaptive Window Sizing:* Detectors D5 and D6 have high resolving power ($R \approx 110 - 130$), so nominal $\pm 1/R$ windows are very narrow ($\approx \pm 0.8\% - 0.9\%$). If a survey pass has sparse coverage, a fixed window may yield zero matching exposures. When `adaptive_window=true`, the backend adaptively widens the window half-width $w_b$ per target until every available epoch has at least $N_{\text{min}} \ge 1$ matched exposures, attaching an `[Adaptive Window (w=...)]` and residual warning badge if $w_b > 1/R_b$.
@@ -320,6 +321,7 @@ sequenceDiagram
    $$I_{\text{coadd}}(x, y) = \frac{\sum_{i \in S(e, b)} I_i(x, y) / \sigma_i^2(x, y)}{\sum_{i \in S(e, b)} 1 / \sigma_i^2(x, y)}, \quad \sigma_{\text{coadd}}^2(x, y) = \frac{1}{\sum_{i \in S(e, b)} 1 / \sigma_i^2(x, y)}$$
    Pixels with fatal flags (`OVERFLOW`, `NONFUNC`, `TRANSIENT`) are excluded. Populates the per-pixel exposure count plane $N_{\text{exp}}(x, y)$.
 8. **Binary Tensor Packaging:** Serves the little-endian binary tensor payload (Section 3.2) alongside JSON metadata.
+9. **Task Progress:** Report queue wait, SIA query, cutout fetch, fallback, wavelength selection, reprojection, coaddition, and packaging as they actually occur. Do not mark packaging complete before ingestion begins. Repeated identical active requests share one task ID.
 
 ### 3.2 Binary Tensor Format (`application/octet-stream`)
 To eliminate 8-bit quantization artifacts (banding, posterization) during client-side dynamic Asinh stretching and pairwise difference subtraction while minimizing network payloads, the backend streams raw IEEE-754 Little-Endian Float32Array binary buffers:
@@ -366,6 +368,30 @@ To minimize network transfer latency over constrained mobile and venue networks 
   - $600''$ Cutout ($97 \times 97\,\text{px}$): $2,371\,\text{KB} \to \mathbf{\approx 480\,\text{KB}}$
 - **Client Web Worker Decompression:** The browser decompresses the stream via `zstd-wasm` (<25 KB WASM binary) inside a dedicated Web Worker, un-shuffling the 4 blocks back into a bit-for-bit identical IEEE-754 `Float32Array` in $<3\,\text{ms}$, and passes it to the main thread as a zero-copy Transferable Object (`postMessage(..., [buffer])`).
 
+### 3.3 Processing Performance Plan and Acceptance Gate
+
+#### Current measured facts
+- The queue has five waiting slots and coalesces identical active requests. The implementation now completes one active queue task at a time; duplicate browser POSTs previously consumed multiple slots.
+- A live WISE 0855 query returned 261 QR2 SIA rows and zero QR3 rows. A QR2-only tensor is therefore correct for that target; QR3 absence is not an ingestion failure.
+- A live QR3 S3 object returned the required cutout HDUs through the fallback. One 1 MiB HTTPS Range request took approximately 15 seconds in this development environment. This is one observation, not a latency distribution.
+- The current IRSA cutout client allows two attempts with a 45-second timeout per attempt. A slow or partial response can therefore hold a task for up to 90 seconds per selected exposure before S3 fallback.
+- No per-stage timing telemetry exists yet. The project has no measured p50/p95 request latency and must not advertise a performance percentile until the baseline below is collected.
+
+#### Optimization order
+1. **Instrument before tuning.** Record queue wait/depth, deduplication count, SIA duration and rows by release, selected exposure count by release, IRSA attempt/status/bytes/duration, S3 range count/bytes/duration, wavelength-match count, reprojection, coaddition, and packaging time. Progress state must match the active stage.
+2. **Remove repeated archive work.** Cache SIA results by normalized target cone and release for 10 minutes; cache completed tensors by request fingerprint for 15 minutes; add a bounded local source-object cache keyed by URL plus ETag. Cache entries retain release provenance and expire independently.
+3. **Reduce bytes per time-domain task.** Do not fetch PSF HDU 5 for the Time-Domain Comparator. Keep full WCS-WAVE support initially; benchmark a detector-coordinate lookup slice and accept it only after numerical comparison against full-table results. Preserve full PSF/WCS-WAVE access for consumers that need them.
+4. **Bound slow requests.** Set a total per-exposure IRSA deadline rather than restarting the full timeout for every retry. Preserve one retry for transient failures; fall back as soon as the deadline expires or required HDUs remain incomplete. Propagate cancellation and stop retries when the task deadline has expired.
+5. **Add bounded concurrency.** Run two asynchronous task workers in the FastAPI process. Share one global semaphore capped at four concurrent archive requests across both workers. Run CPU-bound reprojection in a two-process pool. Keep the pending queue bounded at five; distinct requests receive 503 backpressure when full.
+6. **Scale to multiple API processes only with shared state.** Before running multiple Uvicorn workers, move task state, deduplication keys, queue claims, and tensor references to a shared durable broker/store. The in-memory `asyncio.Queue` and dictionaries are single-process only.
+
+#### Provisional acceptance goals
+- Cached identical request: p95 below 3 seconds.
+- Live cutout task: p95 below 120 seconds for a target with usable archive coverage and no more than 18 selected exposure cutouts.
+- Queue wait: p95 below 5 seconds when at least one worker slot is free.
+- Measure at least 20 cold and 20 warm requests for Barnard's Star (QR2+QR3 coverage), WISE 0855 (QR2 coverage with no QR3 rows), and a no-coverage coordinate. Report medians, p95, failures, release counts, bytes fetched, and cache-hit rates.
+- These are proposed targets, not current guarantees. If measured range-read bandwidth or archive latency makes them unattainable, revise the data-fetch strategy before claiming compliance.
+
 ---
 
 ## 4. Backend Engineering & Scientific Processing Pipeline
@@ -384,14 +410,14 @@ To minimize network transfer latency over constrained mobile and venue networks 
 [Client Query: RA, Dec, FoV, Cadence, synth_a_ra, synth_a_dec, synth_a_pmra, synth_a_pmdec]
          |
          v
-[IRSA SIAv2 Query via pyvo]
-URL: https://irsa.ipac.caltech.edu/SIA?COLLECTION=spherex_qr2&POS=circle+{ra}+{dec}+{fov_deg}
+[Concurrent IRSA SIAv2 Queries]
+URLs: https://irsa.ipac.caltech.edu/SIA?COLLECTION={spherex_qr2|spherex_qr3}&POS=circle+{ra}+{dec}+{fov_deg}
          |
          +--> Returns VOTable with t_min, t_max, detector_id, s_region, access_url, s3_uri
          |
-[Server-Side MEF Cutout Ingestion (Primary) / S3 Range Reader (Fallback)]
+[Server-Side MEF Cutout Ingestion (Primary) / HTTPS Range Reader (Fallback)]
 Primary: <access_url>?center={ra},{dec}&size={fov_deg} (IRSA Cutout Service)
-Fallback: s3://nasa-irsa-spherex/qr2/... via astropy.io.fits + fsspec
+Fallback: per-exposure cloud_access object via anonymous HTTPS Range reads
          |
          +--> Extracts cropped HDUs 1 (IMAGE), 2 (FLAGS), 3 (VARIANCE), plus full HDU 5 (PSF) & HDU 6 (WCS-WAVE)
          |
@@ -410,7 +436,7 @@ CDELT1 = -0.00172222 deg (-6.2 arcsec), CDELT2 = +0.00172222 deg (+6.2 arcsec)
 CTYPE1 = 'RA---TAN', CTYPE2 = 'DEC--TAN', CROTA2 = 0.0 (True North-Up, East-Left)
 NAXIS1 = NAXIS2 = int(fov_arcsec / 6.2)
          |
-[Dual-Engine Reprojection via reproject (Offloaded to ProcessPoolExecutor)]
+[Dual-Engine Reprojection via reproject (2-worker ProcessPoolExecutor)]
 HDU 1 (IMAGE) & HDU 3 (VARIANCE): reproject_exact (Flux-conserving spherical polygon area intersection)
 HDU 2 (FLAGS): reproject_interp(order='nearest-neighbor') (Preserves integer bitmask values!)
          |
@@ -518,7 +544,7 @@ To completely eliminate the runtime performance and type-safety trade-offs of no
 
 1. **CPU Offload, `uvloop` & GIL Bypass (`ProcessPoolExecutor`):**
    - **`uvloop` Event Loop Integration:** Replaces Python's default `asyncio` event loop with `uvloop` (`asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())`), delivering 2x–4x higher HTTP/WebSocket request throughput and $<0.5\,\text{ms}$ scheduling jitter.
-   - The primary event loop serves HTTP routing, SSE streams, and WebSocket frames at sub-millisecond response times.
+   - The primary event loop serves HTTP routing, JSON progress polling, optional SSE streams, and WebSocket frames.
    - Heavy scientific workloads (`reproject_exact`, empirical PSF convolution, and Chebyshev continuum fits) are offloaded to an asynchronous process pool:
      ```python
      cpu_pool = ProcessPoolExecutor(max_workers=2)
@@ -529,7 +555,7 @@ To completely eliminate the runtime performance and type-safety trade-offs of no
      ```
    - Running in separate OS worker processes bypasses Python's Global Interpreter Lock (GIL) entirely, preventing event-loop starvation during intensive cutout reprojections.
    - **Tangent Coordinate Meshgrid Pre-Caching:** Pre-computes target world coordinates $(\alpha, \delta)$ once per master tangent grid ($w \times h$) and reuses the coordinate grid across all 6 detector bands and survey epochs, eliminating 80% of redundant spherical coordinate transformations.
-   - Uvicorn runs a single async `uvloop` worker (`--workers 1`) paired with `ProcessPoolExecutor(max_workers=2)`, utilizing both vCPUs on Hugging Face Spaces for CPU-bound math while keeping `asyncio.Queue(maxsize=5)`, SSE streams, `AdminTelemetryHub`, and the 1.0 GB `LRUCache` unified in one process.
+   - Uvicorn runs one API process with two bounded asynchronous cutout task workers, a shared archive-I/O semaphore capped at four requests, and `ProcessPoolExecutor(max_workers=2)` for CPU-bound reprojection. Keep one API process while task state and `asyncio.Queue(maxsize=5)` remain in memory; multiple API processes require shared durable queue/task state. Progress uses JSON polling, with optional SSE support.
 
 2. **Automated Compile-Time SQL Verification (`backend/tests/test_sql.py`):**
    - To replace Go's `sqlc` build-time SQL compilation checks, CI (`ci.yml`) runs an automated test that loads `schema.sql` into a temporary test database and executes `EXPLAIN` against every parameterized query in `queries.py`:
@@ -2049,11 +2075,11 @@ flowchart TD
 #### Deliverables & Sequential Steps:
 1. **Unified FastAPI Mission Engine (`backend/` via `uv` on port 7860):**
    - Initialize single backend repository with `uv init` and install dependencies: `fastapi`, `uvicorn`, `astropy`, `pyvo`, `reproject`, `numpy`, `scipy`, `asyncpg`, `cachetools`.
-   - Implement IRSA SIA2 client (`pyvo`) querying `https://irsa.ipac.caltech.edu/SIA?COLLECTION=spherex_qr2&POS=circle+{ra}+{dec}+{radius}`.
-   - Implement IRSA Cutout API ingestion as primary; AWS Open Data S3 byte-range section reader (`astropy.io.fits` + `fsspec`) as resilient fallback.
+   - Implement concurrent IRSA SIA2 queries for `spherex_qr2` and `spherex_qr3` via async `httpx`, preserving per-release coverage and `cloud_access` provenance.
+   - Implement IRSA Cutout API ingestion as primary; verified anonymous HTTPS Range FITS reader as fallback.
    - WCS North-Up tangent plane reprojection engine (`reproject_exact` for flux/variance; nearest-neighbor for FLAGS bitmasks).
    - Zero-copy binary Float32 tensor streamer endpoint: `GET /api/cutout/{task_id}/tensor` returning raw IEEE-754 multi-epoch arrays.
-   - Bounded task queue (`asyncio.Queue(maxsize=5)`) and SSE progress stream (`/api/cutout/progress/{task_id}`).
+   - Bounded queue with five pending slots, two active asynchronous cutout workers, active-request coalescing, and truthful JSON progress on `/api/cutout/progress/{task_id}`.
    - Zero-Auth Observer Session Verifier parsing `X-Observer-ID` and `X-Observer-Key` headers.
    - In-memory LRU tensor and spectrum cache ($<10\,\text{ms}$ response for repeated benchmark queries).
 2. **Database Seeding (`seed_benchmarks.sql`):**
