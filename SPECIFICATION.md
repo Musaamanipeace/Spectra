@@ -371,18 +371,25 @@ To minimize network transfer latency over constrained mobile and venue networks 
 ### 3.3 Processing Performance Plan and Acceptance Gate
 
 #### Current measured facts
-- The queue has five waiting slots and coalesces identical active requests. The implementation now completes one active queue task at a time; duplicate browser POSTs previously consumed multiple slots.
+- The queue has five waiting slots, two in-process asynchronous consumers, and coalesces identical active requests. Duplicate browser POSTs previously consumed multiple slots.
 - A live WISE 0855 query returned 261 QR2 SIA rows and zero QR3 rows. A QR2-only tensor is therefore correct for that target; QR3 absence is not an ingestion failure.
 - A live QR3 S3 object returned the required cutout HDUs through the fallback. One 1 MiB HTTPS Range request took approximately 15 seconds in this development environment. This is one observation, not a latency distribution.
-- The current IRSA cutout client allows two attempts with a 45-second timeout per attempt. A slow or partial response can therefore hold a task for up to 90 seconds per selected exposure before S3 fallback.
-- No per-stage timing telemetry exists yet. The project has no measured p50/p95 request latency and must not advertise a performance percentile until the baseline below is collected.
+- The current client allows at most two IRSA attempts within one 45-second exposure deadline, then attempts the S3 fallback. S3 range reads have a 60-second object-read deadline after the initial range probe.
+- One 1 MiB S3 range request took approximately 15 seconds in the earlier development observation. Current logs record queue wait, stage durations, SIA duration/row counts, selected exposure counts, and per-exposure source/duration. S3 range count/bytes, wavelength-match counts, and separate coaddition timing still need instrumentation.
+- No cold/warm benchmark has been collected after these changes. There are no measured p50/p95 request latencies; the acceptance goals below remain unverified.
+
+#### Implemented optimization controls (not yet benchmarked)
+- SIA responses are cached in-process for 10 minutes (up to 512 keys), with concurrent identical queries coalesced. Completed tensors are cached by request fingerprint for 15 minutes in the existing 1 GiB LRU.
+- Anonymous S3 blocks are cached in-process up to 64 MiB, keyed by object URL, ETag, and byte range. Time-domain IRSA and S3 parsing skips PSF HDU 5.
+- Archive traffic shares a process-wide semaphore capped at four operations. Reprojection is moved off the event loop and limited to two concurrent threadpool calls to avoid serializing large NumPy arrays and WCS objects into child processes.
+- Progress now advances as discovery, grouping, individual cutout fetches, reprojection, and packaging actually begin. The synchronous S3 reader has a bounded deadline; cancellation cannot forcibly terminate an already-running Python worker thread, but its range requests remain time-limited.
 
 #### Optimization order
 1. **Instrument before tuning.** Record queue wait/depth, deduplication count, SIA duration and rows by release, selected exposure count by release, IRSA attempt/status/bytes/duration, S3 range count/bytes/duration, wavelength-match count, reprojection, coaddition, and packaging time. Progress state must match the active stage.
-2. **Remove repeated archive work.** Cache SIA results by normalized target cone and release for 10 minutes; cache completed tensors by request fingerprint for 15 minutes; add a bounded local source-object cache keyed by URL plus ETag. Cache entries retain release provenance and expire independently.
+2. **Remove repeated archive work.** Implemented: SIA results are cached by normalized target cone and release for 10 minutes; completed tensors are cached by request fingerprint for 15 minutes; a bounded S3 byte-range cache uses URL, ETag, and range. These caches are in-process and are lost on restart. Confirm cache hit rates and memory impact in the benchmark.
 3. **Reduce bytes per time-domain task.** Do not fetch PSF HDU 5 for the Time-Domain Comparator. Keep full WCS-WAVE support initially; benchmark a detector-coordinate lookup slice and accept it only after numerical comparison against full-table results. Preserve full PSF/WCS-WAVE access for consumers that need them.
-4. **Bound slow requests.** Set a total per-exposure IRSA deadline rather than restarting the full timeout for every retry. Preserve one retry for transient failures; fall back as soon as the deadline expires or required HDUs remain incomplete. Propagate cancellation and stop retries when the task deadline has expired.
-5. **Add bounded concurrency.** Run two asynchronous task workers in the FastAPI process. Share one global semaphore capped at four concurrent archive requests across both workers. Run CPU-bound reprojection in a two-process pool. Keep the pending queue bounded at five; distinct requests receive 503 backpressure when full.
+4. **Bound slow requests.** Implemented: two IRSA attempts share a 45-second deadline; incomplete responses or deadline expiry proceed to S3. The S3 range reader has a 60-second object-read budget after its initial probe. Synchronous range reads run in a thread and cannot be immediately killed on coroutine cancellation; replace this with cancellable I/O if measurements show cancellation delay is material.
+5. **Add bounded concurrency.** Implemented: two asynchronous task workers, one archive-I/O semaphore capped at four, and at most two concurrent reprojection calls offloaded with `asyncio.to_thread`. Threads avoid copying large arrays/WCS objects across processes; benchmark event-loop responsiveness and throughput before considering a process pool. The pending queue remains bounded at five; distinct requests receive 503 backpressure when full.
 6. **Scale to multiple API processes only with shared state.** Before running multiple Uvicorn workers, move task state, deduplication keys, queue claims, and tensor references to a shared durable broker/store. The in-memory `asyncio.Queue` and dictionaries are single-process only.
 
 #### Provisional acceptance goals
@@ -415,9 +422,11 @@ URLs: https://irsa.ipac.caltech.edu/SIA?COLLECTION={spherex_qr2|spherex_qr3}&POS
          |
          +--> Returns VOTable with t_min, t_max, detector_id, s_region, access_url, s3_uri
          |
-[Server-Side MEF Cutout Ingestion (Primary) / HTTPS Range Reader (Fallback)]
+[Server-Side MEF Cutout Ingestion (Primary) / ETag-Cached HTTPS Range Reader (Fallback)]
 Primary: <access_url>?center={ra},{dec}&size={fov_deg} (IRSA Cutout Service)
-Fallback: per-exposure cloud_access object via anonymous HTTPS Range reads
+Fallback: per-exposure cloud_access object via anonymous HTTPS Range reads; cache blocks by URL, ETag, and byte range
+         |
+[Time-domain requests extract cropped HDUs 1 (IMAGE), 2 (FLAGS), 3 (VARIANCE), and 6 (WCS-WAVE); PSF HDU 5 is loaded only by consumers that require it]
          |
          +--> Extracts cropped HDUs 1 (IMAGE), 2 (FLAGS), 3 (VARIANCE), plus full HDU 5 (PSF) & HDU 6 (WCS-WAVE)
          |
@@ -436,7 +445,7 @@ CDELT1 = -0.00172222 deg (-6.2 arcsec), CDELT2 = +0.00172222 deg (+6.2 arcsec)
 CTYPE1 = 'RA---TAN', CTYPE2 = 'DEC--TAN', CROTA2 = 0.0 (True North-Up, East-Left)
 NAXIS1 = NAXIS2 = int(fov_arcsec / 6.2)
          |
-[Dual-Engine Reprojection via reproject (2-worker ProcessPoolExecutor)]
+[WCS Reprojection via reproject (at most 2 concurrent thread calls)]
 HDU 1 (IMAGE) & HDU 3 (VARIANCE): reproject_exact (Flux-conserving spherical polygon area intersection)
 HDU 2 (FLAGS): reproject_interp(order='nearest-neighbor') (Preserves integer bitmask values!)
          |
@@ -542,20 +551,12 @@ All routes are registered cleanly on a single FastAPI `APIRouter` hierarchy:
 #### 4.2.5 High-Throughput Python Hardening & Runtime Parity Mechanics
 To completely eliminate the runtime performance and type-safety trade-offs of not using a compiled language like Go, the backend implements four hardening mechanisms:
 
-1. **CPU Offload, `uvloop` & GIL Bypass (`ProcessPoolExecutor`):**
+1. **CPU Offload and Bounded Reprojection:**
    - **`uvloop` Event Loop Integration:** Replaces Python's default `asyncio` event loop with `uvloop` (`asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())`), delivering 2x–4x higher HTTP/WebSocket request throughput and $<0.5\,\text{ms}$ scheduling jitter.
    - The primary event loop serves HTTP routing, JSON progress polling, optional SSE streams, and WebSocket frames.
-   - Heavy scientific workloads (`reproject_exact`, empirical PSF convolution, and Chebyshev continuum fits) are offloaded to an asynchronous process pool:
-     ```python
-     cpu_pool = ProcessPoolExecutor(max_workers=2)
-
-     async def offloaded_reprojection(hdus, master_wcs):
-         loop = asyncio.get_running_loop()
-         return await loop.run_in_executor(cpu_pool, run_reproject_exact, hdus, master_wcs)
-     ```
-   - Running in separate OS worker processes bypasses Python's Global Interpreter Lock (GIL) entirely, preventing event-loop starvation during intensive cutout reprojections.
+   - Time-domain reprojection is offloaded with `asyncio.to_thread` and guarded by a semaphore of two concurrent operations. This keeps NumPy arrays and WCS objects in-process and prevents synchronous reprojection from blocking the event loop. It does not guarantee parallel execution for Python code that holds the GIL.
    - **Tangent Coordinate Meshgrid Pre-Caching:** Pre-computes target world coordinates $(\alpha, \delta)$ once per master tangent grid ($w \times h$) and reuses the coordinate grid across all 6 detector bands and survey epochs, eliminating 80% of redundant spherical coordinate transformations.
-   - Uvicorn runs one API process with two bounded asynchronous cutout task workers, a shared archive-I/O semaphore capped at four requests, and `ProcessPoolExecutor(max_workers=2)` for CPU-bound reprojection. Keep one API process while task state and `asyncio.Queue(maxsize=5)` remain in memory; multiple API processes require shared durable queue/task state. Progress uses JSON polling, with optional SSE support.
+   - Uvicorn runs one API process with two bounded asynchronous cutout task workers, a shared archive-I/O semaphore capped at four operations, and at most two concurrent reprojection thread calls. Keep one API process while task state and `asyncio.Queue(maxsize=5)` remain in memory; multiple API processes require shared durable queue/task state. Progress uses JSON polling, with optional SSE support.
 
 2. **Automated Compile-Time SQL Verification (`backend/tests/test_sql.py`):**
    - To replace Go's `sqlc` build-time SQL compilation checks, CI (`ci.yml`) runs an automated test that loads `schema.sql` into a temporary test database and executes `EXPLAIN` against every parameterized query in `queries.py`:
