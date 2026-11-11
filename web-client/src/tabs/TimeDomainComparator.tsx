@@ -91,7 +91,6 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
     setRenderMode,
     activeEpochIndex,
     setEpochIndex,
-    stepEpoch,
     isPlaying,
     setPlayback,
     togglePlayback,
@@ -124,6 +123,22 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
   const [triageConfidence, setTriageConfidence] = useState<number>(85);
   const [triageSubmitted, setTriageSubmitted] = useState<boolean>(false);
   const [isSubmittingClassification, setIsSubmittingClassification] = useState<boolean>(false);
+  const [loadedTensor, setLoadedTensor] = useState<{
+    fluxData: Float32Array[][];
+    varData: Float32Array[][];
+    flagsData: Uint32Array[][];
+    nExpData: Uint16Array[][];
+    width: number;
+    height: number;
+    epochs: number;
+    isSimulated: boolean;
+    sourceBadge: string;
+    mjdRanges?: number[][][];
+    exposureIds?: string[][] | string[];
+  } | null>(null);
+  const [dataStatus, setDataStatus] = useState<'loading' | 'error' | 'ready'>('loading');
+  const [dataMessage, setDataMessage] = useState('Contacting the SPHEREx archive…');
+  const [loadAttempt, setLoadAttempt] = useState(0);
 
   const handleSubmitClassification = async () => {
     setIsSubmittingClassification(true);
@@ -206,7 +221,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
         nextBenchmark.ra,
         nextBenchmark.dec,
         nextBenchmark.name,
-        '[Benchmark Model (Simulated)]'
+        '[IRSA query pending]'
       );
     }
   };
@@ -224,6 +239,28 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
     return undefined;
   }, [urlRa, urlDec]);
 
+  const surveyPasses = useMemo<SurveyPass[]>(() => {
+    if (!loadedTensor) return DISCRETE_SURVEY_PASSES;
+    return Array.from({ length: loadedTensor.epochs }, (_, passIndex) => {
+      const ranges = (loadedTensor.mjdRanges?.[passIndex] || []).filter(
+        (range): range is number[] =>
+          Array.isArray(range) && range.length >= 2 && range.every(Number.isFinite) && range[0] > 0 && range[1] > 0
+      );
+      const mjdStart = ranges.length ? Math.min(...ranges.map((range) => range[0])) : 0;
+      const mjdEnd = ranges.length ? Math.max(...ranges.map((range) => range[1])) : mjdStart;
+      const mjd = (mjdStart + mjdEnd) / 2;
+      const dateStr = mjd > 0 ? new Date((mjd - 40587) * 86400000).toISOString().slice(0, 10) : 'Date unavailable';
+      return {
+        passIndex,
+        label: `Pass ${passIndex + 1}`,
+        mjd,
+        mjdRange: [mjdStart, mjdEnd] as [number, number],
+        dateStr,
+        rollAngleDeg: 0,
+      };
+    });
+  }, [loadedTensor]);
+
   // Synchronize renderMode with URL
   useEffect(() => {
     if (urlMode === 'blink' || urlMode === 'difference' || urlMode === 'coadd') {
@@ -235,12 +272,12 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
   useEffect(() => {
     if (!isPlaying) return;
     const interval = setInterval(() => {
-      setEpochIndex((activeEpochIndex + 1) % DISCRETE_SURVEY_PASSES.length);
+      setEpochIndex((activeEpochIndex + 1) % Math.max(surveyPasses.length, 1));
     }, playbackSpeedMs);
     return () => clearInterval(interval);
-  }, [isPlaying, activeEpochIndex, playbackSpeedMs, setEpochIndex]);
+  }, [isPlaying, activeEpochIndex, playbackSpeedMs, setEpochIndex, surveyPasses.length]);
 
-  // 3. Offline procedural fallback tensor generator (used only when .f32 / live IRSA cutout is unavailable)
+  // Legacy procedural model is retained for explicit offline workflows; the live viewer never renders it.
   const scienceTensors = useMemo(() => {
     const epochsCount = DISCRETE_SURVEY_PASSES.length;
     const bandsCount = BANDS.length;
@@ -361,20 +398,6 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
   }, [activeBenchmark, urlRa, urlDec]);
 
   // Load binary tensor from pre-cached .f32 bundle OR live backend /api/cutout pipeline
-  const [loadedTensor, setLoadedTensor] = useState<{
-    fluxData: Float32Array[][];
-    varData: Float32Array[][];
-    flagsData: Uint32Array[][];
-    nExpData: Uint16Array[][];
-    width: number;
-    height: number;
-    epochs: number;
-    isSimulated: boolean;
-    sourceBadge: string;
-    mjdRanges?: number[][];
-    exposureIds?: string[][] | string[];
-  } | null>(null);
-
   useEffect(() => {
     let cancelled = false;
 
@@ -431,7 +454,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
         ? activeBenchmark
           ? '[Benchmark Model (Simulated)]'
           : '[Simulated Fallback (Offline)]'
-        : hdr.source_badge || '[IRSA Live (spherex_qr2)]';
+        : hdr.source_badge || `[IRSA Live (${hdr.release || 'release unavailable'})]`;
 
       return {
         fluxData,
@@ -449,25 +472,10 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
     };
 
     const loadCutoutTensor = async () => {
-      // 1. Try pre-cached static bundle for benchmark targets
-      if (activeBenchmark) {
-        try {
-          const res = await fetch(`/benchmarks/${activeBenchmark.id}.f32`);
-          if (res.ok) {
-            const buf = await res.arrayBuffer();
-            const parsed = parseBinaryTensorBuffer(buf);
-            if (!cancelled && parsed) {
-              setLoadedTensor(parsed);
-              useTelemetryStore.setState({ sourceBadge: parsed.sourceBadge });
-              return;
-            }
-          }
-        } catch {
-          // Proceed to backend cutout API
-        }
-      }
-
-      // 2. Query backend cutout pipeline (POST /api/cutout -> GET /api/cutout/{task_id}/tensor)
+      setDataStatus('loading');
+      setDataMessage('Querying IRSA for real SPHEREx exposures…');
+      setLoadedTensor(null);
+      setEpochIndex(0);
       try {
         const postRes = await fetch('/api/cutout', {
           method: 'POST',
@@ -479,34 +487,42 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
             adaptive_window: true,
           }),
         });
-        if (postRes.ok) {
-          const { task_id } = await postRes.json();
-          for (let attempt = 0; attempt < 15 && !cancelled; attempt++) {
-            await new Promise((r) => setTimeout(r, 150));
-            const tensorRes = await fetch(`/api/cutout/${task_id}/tensor`);
-            if (tensorRes.status === 200) {
-              const buf = await tensorRes.arrayBuffer();
-              const parsed = parseBinaryTensorBuffer(buf);
-              if (!cancelled && parsed) {
-                setLoadedTensor(parsed);
-                useTelemetryStore.setState({ sourceBadge: parsed.sourceBadge });
-                return;
-              }
-              break;
-            }
-          }
+        if (!postRes.ok) {
+          const body = await postRes.json().catch(() => ({}));
+          throw new Error(body.detail || `IRSA request failed (${postRes.status})`);
         }
-      } catch {
-        // Offline fallback
-      }
-
-      if (!cancelled) {
-        setLoadedTensor(null);
-        useTelemetryStore.setState({
-          sourceBadge: activeBenchmark
-            ? '[Benchmark Model (Simulated)]'
-            : '[Simulated Fallback (Offline)]',
-        });
+        const { task_id } = await postRes.json();
+        const deadline = Date.now() + 180_000;
+        while (!cancelled && Date.now() < deadline) {
+          await new Promise((resolve) => setTimeout(resolve, 750));
+          const progressRes = await fetch(`/api/cutout/progress/${task_id}`);
+          if (!progressRes.ok) throw new Error(`IRSA task status failed (${progressRes.status})`);
+          const progress = await progressRes.json();
+          if (progress.status === 'error') throw new Error(progress.message || 'IRSA could not return usable exposures.');
+          if (progress.status !== 'complete') {
+            setDataMessage(progress.message || 'Waiting for IRSA cutouts…');
+            continue;
+          }
+          const tensorRes = await fetch(`/api/cutout/${task_id}/tensor`);
+          if (!tensorRes.ok) throw new Error(`IRSA tensor request failed (${tensorRes.status})`);
+          const parsed = parseBinaryTensorBuffer(await tensorRes.arrayBuffer());
+          if (!parsed || parsed.isSimulated) {
+            throw new Error('The archive returned no verified real-data tensor. No synthetic preview is shown.');
+          }
+          if (!cancelled) {
+            setLoadedTensor(parsed);
+            setDataStatus('ready');
+            useTelemetryStore.setState({ sourceBadge: parsed.sourceBadge });
+          }
+          return;
+        }
+        if (!cancelled) throw new Error('IRSA request timed out before returning exposure data.');
+      } catch (error) {
+        if (!cancelled) {
+          setDataMessage(error instanceof Error ? error.message : 'IRSA data request failed.');
+          setDataStatus('error');
+          useTelemetryStore.setState({ sourceBadge: '[IRSA data unavailable]' });
+        }
       }
     };
 
@@ -514,13 +530,13 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
     return () => {
       cancelled = true;
     };
-  }, [activeBenchmark, urlRa, urlDec, urlFov]);
+  }, [activeBenchmark, urlRa, urlDec, urlFov, loadAttempt, setEpochIndex]);
 
   const activeTensors = loadedTensor || scienceTensors;
   const isSimulatedDisplay = loadedTensor ? loadedTensor.isSimulated : true;
   const currentWidth = loadedTensor ? loadedTensor.width : CANVAS_PIXEL_DIM;
   const currentHeight = loadedTensor ? loadedTensor.height : CANVAS_PIXEL_DIM;
-  const totalEpochsCount = loadedTensor ? loadedTensor.epochs : DISCRETE_SURVEY_PASSES.length;
+  const totalEpochsCount = loadedTensor ? loadedTensor.epochs : surveyPasses.length;
 
   // Active planes for current selection
   const safeEpochIndex = activeEpochIndex % totalEpochsCount;
@@ -543,8 +559,8 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
   // Gaia DR3 Centroid Reticle Calculation (SPECIFICATION.md §6.1.7 Item 2)
   const gaiaReticle = useMemo(() => {
     if (!activeBenchmark) return null;
-    const epochMjd = DISCRETE_SURVEY_PASSES[safeEpochIndex].mjd;
-    const deltaYears = (epochMjd - DISCRETE_SURVEY_PASSES[0].mjd) / 365.25;
+    const epochMjd = surveyPasses[safeEpochIndex]?.mjd ?? 0;
+    const deltaYears = (epochMjd - (surveyPasses[0]?.mjd ?? epochMjd)) / 365.25;
     const center = currentWidth / 2;
 
     if (activeBenchmark.id === 'barnard') {
@@ -577,7 +593,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
       subpixelY: center,
       label: `${activeBenchmark.name} (stationary <0.3 px)`,
     };
-  }, [activeBenchmark, safeEpochIndex, currentWidth]);
+  }, [activeBenchmark, safeEpochIndex, currentWidth, surveyPasses]);
 
   const benchmarkReticle = gaiaReticle;
 
@@ -618,7 +634,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
             const dxPx = p1.x - p0.x;
             const dyPx = p1.y - p0.y;
             const dtYears = Math.abs(
-              (DISCRETE_SURVEY_PASSES[p1.epoch].mjd - DISCRETE_SURVEY_PASSES[p0.epoch].mjd) / 365.25
+              (surveyPasses[p1.epoch].mjd - surveyPasses[p0.epoch].mjd) / 365.25
             ) || 0.5;
 
             const deltaAlphaArcsec = dxPx * 6.2;
@@ -641,12 +657,12 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
         });
       }
     },
-    [measuringMotion, currentFluxPlane, activeEpochIndex, setProbedPixel, setUrlProbeX, setUrlProbeY]
+    [measuringMotion, currentFluxPlane, activeEpochIndex, surveyPasses, setProbedPixel, setUrlProbeX, setUrlProbeY]
   );
 
   // Forced 3x3 Aperture Light Curve Data across epochs (D1 vs D5)
   const lightCurveData = useMemo(() => {
-    return DISCRETE_SURVEY_PASSES.map((pass, eIdx) => {
+    return surveyPasses.map((pass, eIdx) => {
       // Sample 3x3 center aperture flux in D1 and D5
       const ep = eIdx % totalEpochsCount;
       const d1Plane = activeTensors.fluxData[ep]?.[0];
@@ -674,10 +690,42 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
         fluxD5: d5Sum / 9.0,
       };
     });
-  }, [activeTensors, totalEpochsCount, currentWidth, currentHeight]);
+  }, [activeTensors, surveyPasses, totalEpochsCount, currentWidth, currentHeight]);
 
-  const activePass = DISCRETE_SURVEY_PASSES[activeEpochIndex];
+  const activePass = surveyPasses[safeEpochIndex];
   const activeBand = BANDS[activeBandIndex];
+
+  if (!loadedTensor) {
+    return (
+      <main className="min-h-[70vh] bg-slate-950 px-6 py-16 text-slate-100">
+        <section className="mx-auto max-w-2xl rounded-2xl border border-cyan-900/60 bg-slate-900/80 p-8">
+          <p className="font-mono text-xs uppercase tracking-[0.22em] text-cyan-300">
+            {dataStatus === 'loading' ? 'IRSA archive request' : 'Real data unavailable'}
+          </p>
+          <h1 className="mt-3 text-2xl font-semibold">Time-domain observations</h1>
+          <p className="mt-4 text-sm leading-6 text-slate-300" role={dataStatus === 'loading' ? 'status' : 'alert'}>
+            {dataMessage}
+          </p>
+          {dataStatus === 'loading' ? (
+            <div className="mt-6 h-1 overflow-hidden rounded bg-slate-800">
+              <div className="h-full w-1/3 animate-pulse rounded bg-cyan-400" />
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="mt-6 rounded-lg border border-cyan-700 px-4 py-2 text-sm text-cyan-200 hover:bg-cyan-950"
+              onClick={() => setLoadAttempt((attempt) => attempt + 1)}
+            >
+              Retry archive query
+            </button>
+          )}
+          <p className="mt-6 text-xs text-slate-500">
+            Only verified IRSA cutouts are rendered. Synthetic benchmark previews are disabled in this viewer.
+          </p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col overflow-y-auto bg-black font-sans text-white lg:flex-row lg:overflow-hidden">
@@ -838,7 +886,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
               </button>
               <button
                 type="button"
-                onClick={() => stepEpoch(-1)}
+                onClick={() => setEpochIndex((activeEpochIndex + surveyPasses.length - 1) % surveyPasses.length)}
                 title="Previous Pass (ArrowLeft)"
                 className="rounded-full border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:text-white hover:border-neutral-600 transition-colors"
               >
@@ -858,7 +906,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
               </button>
               <button
                 type="button"
-                onClick={() => stepEpoch(1)}
+                onClick={() => setEpochIndex((activeEpochIndex + 1) % surveyPasses.length)}
                 title="Next Pass (ArrowRight)"
                 className="rounded-full border border-neutral-800 bg-neutral-900 px-2.5 py-1 text-xs text-neutral-300 hover:text-white hover:border-neutral-600 transition-colors"
               >
@@ -868,9 +916,8 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
 
             {/* Discrete Pass Pills with Human Dates */}
             <div className="flex items-center space-x-1.5 overflow-x-auto py-1">
-              {DISCRETE_SURVEY_PASSES.map((pass, idx) => {
-                const dates = ['May 2025', 'Nov 2025', 'May 2026', 'Nov 2026'];
-                const humanDate = dates[idx] || `MJD ${pass.mjd}`;
+              {surveyPasses.map((pass, idx) => {
+                const humanDate = pass.dateStr;
                 return (
                   <button
                     key={pass.passIndex}
@@ -1062,7 +1109,7 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
                 </tr>
               </thead>
               <tbody>
-                {DISCRETE_SURVEY_PASSES.map((pass, pIdx) => (
+                {surveyPasses.map((pass, pIdx) => (
                   <tr
                     key={pass.passIndex}
                     className={`border-b border-neutral-800/50 transition-colors ${
