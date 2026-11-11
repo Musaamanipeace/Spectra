@@ -13,6 +13,7 @@ tasks:
       - task: setup:backend
       - task: setup:frontend
       - task: setup:benchmarks
+      - task: db:up
       - task: setup:info
 
   setup:hooks:
@@ -71,18 +72,26 @@ tasks:
         echo "============================================================"
 
   db:up:
-    desc: "Start local Supabase Postgres and apply schema + benchmark seeds (optional)"
+    desc: "Start local Postgres/Supabase and apply schema + benchmark seeds"
     cmds:
       - |
-        export PATH="$HOME/.local/bin:$PATH"
-        if command -v supabase >/dev/null 2>&1 && command -v psql >/dev/null 2>&1; then
-          supabase start
-          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -f backend/db/schema.sql
-          psql "postgresql://postgres:postgres@127.0.0.1:54322/postgres" -f backend/db/seed_benchmarks.sql
-        else
-          echo "[NOTICE] Local Supabase/psql not in PATH; skipping local DB container."
-          echo "         FastAPI backend will run with pooler / offline fallback."
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+
+        # 1. Start local container if not already running on port 54322
+        if command -v supabase >/dev/null 2>&1; then
+          supabase start >/dev/null 2>&1 || true
+        elif command -v docker >/dev/null 2>&1; then
+          if ! docker ps --format '{{.Names}}' | grep -q "supabase_db\|spectra-postgres"; then
+            if docker ps -a --format '{{.Names}}' | grep -q "spectra-postgres"; then
+              docker start spectra-postgres >/dev/null 2>&1 || true
+            else
+              docker run -d --name spectra-postgres -p 54322:5432 -e POSTGRES_PASSWORD=postgres postgres:18.6-alpine3.24 >/dev/null 2>&1 || true
+            fi
+          fi
         fi
+
+        # 2. Run Python asyncpg DB initializer (applies schema and seeds)
+        cd backend && uv run python -m db.init_db
 
   types:sync:
     desc: "Generate strict TypeScript types from FastAPI OpenAPI schema"
@@ -102,12 +111,36 @@ tasks:
     cmds:
       - npm run dev
 
-  dev:
-    desc: "Start the complete Spectra stack concurrently"
+  dev:preflight:
+    desc: "Auto-install dependencies and verify benchmarks if missing"
+    cmds:
+      - |
+        export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
+        if [ ! -d "backend/.venv" ]; then
+          echo "[DEV] Initializing Python virtualenv..."
+          cd backend && uv sync
+        fi
+        if [ ! -d "web-client/node_modules" ]; then
+          echo "[DEV] Installing frontend dependencies..."
+          cd web-client && npm install
+        fi
+        if [ ! -f "web-client/public/benchmarks/barnard.f32" ]; then
+          echo "[DEV] Generating benchmark bundles..."
+          cd backend && uv run python ../benchmarks/build.py
+        fi
+
+  dev:services:
+    desc: "Run FastAPI science engine and React web client concurrently"
     deps:
-      - db:up
       - backend:dev
       - web:dev
+
+  dev:
+    desc: "Start the complete Spectra stack (auto-initializes environment & DB)"
+    cmds:
+      - task: dev:preflight
+      - task: db:up
+      - task: dev:services
 
   test:backend:
     desc: "Run backend pytest suite"
