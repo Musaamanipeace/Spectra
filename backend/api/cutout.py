@@ -5,6 +5,7 @@ POST /api/cutout (asyncio.Queue maxsize=5, 202 Accepted or 503 Retry-After: 15).
 GET /api/cutout/progress/{task_id} (SSE stream).
 GET /api/cutout/{task_id}/tensor (14 B/px little-endian binary stream + zstd-shuffle).
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -54,9 +55,11 @@ tensor_cache = LRUCache()
 task_states: dict[str, dict[str, Any]] = {}
 _active_request_tasks: dict[str, str] = {}
 _request_lock = asyncio.Lock()
-_worker_started = False
 _worker_lock = asyncio.Lock()
-_worker_task: asyncio.Task[None] | None = None
+_worker_tasks: set[asyncio.Task[None]] = set()
+_worker_count = 2
+_reprojection_semaphore = asyncio.Semaphore(2)
+_COMPLETED_TENSOR_TTL_SECONDS = 900.0
 
 
 def _new_task_id() -> str:
@@ -117,23 +120,28 @@ async def _enqueue_cutout_task(
 
 
 async def _ensure_worker() -> None:
-    global _worker_started, _worker_task
     async with _worker_lock:
-        if not _worker_started:
-            _worker_task = asyncio.create_task(_queue_worker())
-            _worker_task.add_done_callback(_mark_worker_stopped)
-            _worker_started = True
+        while len(_worker_tasks) < _worker_count:
+            task = asyncio.create_task(_queue_worker())
+            _worker_tasks.add(task)
+            task.add_done_callback(_mark_worker_stopped)
 
 
 def _mark_worker_stopped(task: asyncio.Task[None]) -> None:
-    global _worker_started
-    if task is _worker_task:
-        _worker_started = False
+    _worker_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("Cutout queue worker stopped unexpectedly", exc_info=task.exception())
 
 
 async def _queue_worker() -> None:
     while True:
         task = await cutout_queue.get()
+        logger.info(
+            "Cutout task=%s queue_wait_s=%.3f queue_depth=%d",
+            task.get("task_id"),
+            max(0.0, time.time() - float(task.get("created_at", time.time()))),
+            cutout_queue.qsize(),
+        )
         try:
             await process_cutout_task(task)
         except Exception as exc:
@@ -190,6 +198,7 @@ async def create_cutout(
         if existing_task_id:
             existing_state = task_states.get(existing_task_id)
             if existing_state and existing_state.get("status") in {"queued", "processing"}:
+                logger.info("Cutout request coalesced task=%s", existing_task_id)
                 return {
                     "task_id": existing_task_id,
                     "status": existing_state["status"],
@@ -309,19 +318,51 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
     dec = float(task_data["dec"])
     fov_arcsec = int(task_data.get("fov_arcsec") or 180)
     adaptive_window = bool(task_data.get("adaptive_window", False))
-    try:
-        for stage, prog, msg in [
-            ("resolving", 0.1, "Resolving target coordinates"),
-            ("discovering", 0.2, "Discovering exposures via IRSA SIA2"),
-            ("grouping", 0.35, "Grouping exposures by survey pass MJDs"),
-            ("fetching", 0.55, "Fetching MEF cutouts"),
-            ("coaddition", 0.75, "Inverse-variance coaddition per (Epoch, Band)"),
-            ("packaging", 0.9, "Packaging binary tensor"),
-        ]:
-            task_states.setdefault(task_id, {}).update(
-                {"status": "processing", "stage": stage, "progress": prog, "message": msg}
+    request_key = task_data.get("request_key")
+    started_at = time.monotonic()
+    stage_started_at = started_at
+    current_stage = "queued"
+
+    async def update_stage(stage: str, progress: float, message: str) -> None:
+        nonlocal current_stage, stage_started_at
+        now = time.monotonic()
+        if current_stage != "queued":
+            logger.info(
+                "Cutout task=%s stage=%s duration_s=%.3f",
+                task_id,
+                current_stage,
+                now - stage_started_at,
             )
-            await asyncio.sleep(0.01)
+        current_stage = stage
+        stage_started_at = now
+        task_states.setdefault(task_id, {}).update(
+            {"status": "processing", "stage": stage, "progress": progress, "message": message}
+        )
+
+    try:
+        await update_stage("resolving", 0.05, "Preparing target cutout request")
+        if request_key:
+            cached = await tensor_cache.get(f"request:{request_key}")
+            if (
+                cached
+                and time.monotonic() - float(cached[1].get("cached_at", 0))
+                < _COMPLETED_TENSOR_TTL_SECONDS
+            ):
+                await tensor_cache.set(f"tensor:{task_id}", cached[0], cached[1])
+                task_states[task_id].update(
+                    {
+                        "status": "complete",
+                        "stage": "complete",
+                        "progress": 1.0,
+                        "message": "Complete (cached)",
+                    }
+                )
+                logger.info(
+                    "Cutout task=%s cache_hit=request duration_s=%.3f",
+                    task_id,
+                    time.monotonic() - started_at,
+                )
+                return {"task_id": task_id, "status": "complete", "cache_hit": True}
 
         # Load the requested IRSA release and build epochs from its actual exposures.
         loaded_live_irsa = False
@@ -333,6 +374,7 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                     dec=dec,
                     fov_arcsec=fov_arcsec,
                     adaptive_window=adaptive_window,
+                    progress_hook=update_stage,
                 )
                 candidate_exps = []
                 for exposure in ingest_res.get("exposures", []):
@@ -368,13 +410,37 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                     )
 
                 if candidate_exps:
+                    await update_stage(
+                        "matching",
+                        0.73,
+                        f"Checking wavelength coverage for {len(candidate_exps)} exposures",
+                    )
                     matched_res = filter_wavelength_matched_exposures(
                         candidate_exps, ra=ra, dec=dec, adaptive_window=adaptive_window
                     )
                     if matched_res.matched_exposures:
+                        await update_stage(
+                            "reprojection",
+                            0.78,
+                            f"Reprojecting {len(matched_res.matched_exposures)} wavelength-matched exposures",
+                        )
                         master_wcs, _, shape_out = build_master_wcs(ra, dec, min(fov_arcsec, 180))
-                        reproj_list = reproject_exposures_sync(
-                            matched_res.matched_exposures, master_wcs, shape_out
+                        async with _reprojection_semaphore:
+                            worker = asyncio.create_task(
+                                asyncio.to_thread(
+                                    reproject_exposures_sync,
+                                    matched_res.matched_exposures,
+                                    master_wcs,
+                                    shape_out,
+                                )
+                            )
+                            try:
+                                reproj_list = await asyncio.shield(worker)
+                            except asyncio.CancelledError:
+                                await asyncio.shield(worker)
+                                raise
+                        await update_stage(
+                            "coaddition", 0.86, "Combining matched exposures by epoch and band"
                         )
                         contributing_collections = sorted(
                             {
@@ -397,8 +463,12 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                         coadd_res.metadata["is_simulated"] = False
                         coadd_res.metadata["source_badge"] = f"[IRSA Live ({collection})]"
                         coadd_res.metadata["exposure_count"] = len(reproj_list)
+                        await update_stage("packaging", 0.92, "Packaging verified IRSA tensor")
                         payload = coadd_res.to_bytes(compression="none")
-                        await tensor_cache.set(f"tensor:{task_id}", payload, coadd_res.metadata)
+                        metadata = {**coadd_res.metadata, "cached_at": time.monotonic()}
+                        await tensor_cache.set(f"tensor:{task_id}", payload, metadata)
+                        if request_key:
+                            await tensor_cache.set(f"request:{request_key}", payload, metadata)
                         loaded_live_irsa = True
             except Exception as exc:
                 live_error = str(exc)
@@ -406,8 +476,10 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                 loaded_live_irsa = False
 
         if not loaded_live_irsa and not (task_data.get("synth_a") or task_data.get("synth_b")):
-            message = live_error or (ingest_res.get("error") if "ingest_res" in locals() else None) or (
-                "No usable exposures were returned by the selected IRSA release"
+            message = (
+                live_error
+                or (ingest_res.get("error") if "ingest_res" in locals() else None)
+                or ("No usable exposures were returned by the selected IRSA release")
             )
             task_states[task_id].update(
                 {"status": "error", "progress": 0.0, "stage": "error", "message": message}
@@ -468,12 +540,15 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                     [[60789.85, 61053.42] for _ in range(n_bands)],
                     [[61091.72, 61237.87] for _ in range(n_bands)],
                 ],
-                "exposure_ids": [f"sim_pass{e+1}_d{b+1}" for e in range(n_epochs) for b in range(n_bands)],
+                "exposure_ids": [
+                    f"sim_pass{e + 1}_d{b + 1}" for e in range(n_epochs) for b in range(n_bands)
+                ],
                 "release": "synthetic",
                 "source_badge": source_badge,
                 "is_simulated": True,
                 "compression": "none",
             }
+            await update_stage("packaging", 0.92, "Packaging synthetic injection tensor")
             payload = encode_binary_tensor(
                 flux=flux,
                 variance=variance,
@@ -481,8 +556,14 @@ async def process_cutout_task(task_data: dict[str, Any]) -> dict[str, Any]:
                 n_exposures=n_exp,
                 metadata=header,
             )
-            await tensor_cache.set(f"tensor:{task_id}", payload, header)
+            metadata = {**header, "cached_at": time.monotonic()}
+            await tensor_cache.set(f"tensor:{task_id}", payload, metadata)
+            if request_key:
+                await tensor_cache.set(f"request:{request_key}", payload, metadata)
 
+        logger.info(
+            "Cutout task=%s stage=total duration_s=%.3f", task_id, time.monotonic() - started_at
+        )
         task_states[task_id].update(
             {"status": "complete", "progress": 1.0, "stage": "complete", "message": "Complete"}
         )
