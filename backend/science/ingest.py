@@ -133,6 +133,7 @@ def _parse_sia2_votable(votable_text: str, collection: str) -> dict[str, Any]:
     Returns dict with exposure IDs, MJDs, detector IDs, footprints, cutout URLs.
     """
     result: dict[str, Any] = {
+        "collection": collection,
         "exposure_ids": [],
         "mjds": [],
         "detector_ids": [],
