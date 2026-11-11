@@ -614,7 +614,7 @@ def _fetch_cutout_from_s3(
                 if hdu is not None:
                     try:
                         if output_key == "hdu5_psf":
-                            result[output_key] = np.asarray(hdu.data, dtype=dtype)
+                            result[output_key] = _copy_psf_data(hdu.data)
                         else:
                             result[output_key] = _read_fits_image_section(
                                 hdu, y0, y1, x0, x1, image_shape, dtype
@@ -651,7 +651,7 @@ def _parse_irsa_mef_cutout(fits_data: bytes, collection: str) -> dict[str, Any]:
         "hdu2_flags": None,  # 32-bit integer FLAGS bitmask
         "hdu3_variance": None,  # 32-bit float VARIANCE
         "hdu4_zodi": None,  # 32-bit float ZODI background
-        "hdu5_psf": None,  # 32-bit float PSF cube
+        "hdu5_psf": None,  # PSF image or structured PSF table
         "hdu6_wave_tab": None,  # Binary Table WCS-WAVE
         "hdu1_header": None,
         "metadata": {
@@ -678,7 +678,7 @@ def _parse_irsa_mef_cutout(fits_data: bytes, collection: str) -> dict[str, Any]:
                 elif extname == "ZODI" or (idx == 4 and out["hdu4_zodi"] is None and hdu.data is not None):
                     out["hdu4_zodi"] = np.asarray(hdu.data, dtype=np.float32)
                 elif extname == "PSF" or (idx == 5 and out["hdu5_psf"] is None and hdu.data is not None):
-                    out["hdu5_psf"] = np.asarray(hdu.data, dtype=np.float32)
+                    out["hdu5_psf"] = _copy_psf_data(hdu.data)
                 elif extname in ("WCS-WAVE", "WAVE-TAB") or (idx == 6 and out["hdu6_wave_tab"] is None and hdu.data is not None):
                     try:
                         out["hdu6_wave_tab"] = {
@@ -702,6 +702,13 @@ def _parse_irsa_mef_cutout(fits_data: bytes, collection: str) -> dict[str, Any]:
         logger.debug(f"FITS MEF parse fallback: {exc}")
 
     return out
+
+
+def _copy_psf_data(data: Any) -> np.ndarray:
+    """Preserve structured PSF FITS tables and normalize numeric image HDUs."""
+    if getattr(getattr(data, "dtype", None), "names", None):
+        return data.copy()
+    return np.asarray(data, dtype=np.float32)
 
 
 def _apply_adaptive_wavelength_window(
