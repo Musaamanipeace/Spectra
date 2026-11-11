@@ -115,9 +115,16 @@ async def _enqueue_cutout_task(
 async def _ensure_worker() -> None:
     global _worker_started, _worker_task
     async with _worker_lock:
-        if _worker_task is None or _worker_task.done():
+        if not _worker_started:
             _worker_task = asyncio.create_task(_queue_worker())
+            _worker_task.add_done_callback(_mark_worker_stopped)
             _worker_started = True
+
+
+def _mark_worker_stopped(task: asyncio.Task[None]) -> None:
+    global _worker_started
+    if task is _worker_task:
+        _worker_started = False
 
 
 async def _queue_worker() -> None:
