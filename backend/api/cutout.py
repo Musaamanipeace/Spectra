@@ -55,8 +55,6 @@ task_states: dict[str, dict[str, Any]] = {}
 _worker_started = False
 _worker_lock = asyncio.Lock()
 _worker_task: asyncio.Task[None] | None = None
-_worker_tasks: set[asyncio.Task[None]] = set()
-_worker_count = 2
 
 
 def _new_task_id() -> str:
@@ -118,18 +116,14 @@ async def _ensure_worker() -> None:
     global _worker_started, _worker_task
     async with _worker_lock:
         if not _worker_started:
-            workers = [asyncio.create_task(_queue_worker()) for _ in range(_worker_count)]
-            _worker_tasks.update(workers)
-            _worker_task = workers[0]
-            for worker in workers:
-                worker.add_done_callback(_mark_worker_stopped)
+            _worker_task = asyncio.create_task(_queue_worker())
+            _worker_task.add_done_callback(_mark_worker_stopped)
             _worker_started = True
 
 
 def _mark_worker_stopped(task: asyncio.Task[None]) -> None:
     global _worker_started
-    _worker_tasks.discard(task)
-    if not _worker_tasks:
+    if task is _worker_task:
         _worker_started = False
 
 
