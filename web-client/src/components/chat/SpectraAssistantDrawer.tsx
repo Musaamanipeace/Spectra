@@ -3,6 +3,7 @@ import { useTelemetryStore } from '../../store/useTelemetryStore';
 import { useSpectraUrlState } from '../../hooks/useSpectraUrlState';
 import { GUIDED_TOURS, GuidedTour, TourStep } from './tutorialScenarios';
 import { ASTRONOMY_JARGON, JargonDefinition } from './JargonTooltip';
+import { AssistantModelGuidance } from './AssistantModelGuidance';
 import { cn } from '../../lib/utils';
 
 interface ChatMessage {
@@ -48,7 +49,7 @@ const CANNED_QA: Array<{ trigger: string[]; answer: string; relatedTourId?: stri
 
 export const SpectraAssistantDrawer: React.FC = () => {
   const [isOpen, setIsOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'tours' | 'chat' | 'jargon'>('tours');
+  const [activeTab, setActiveTab] = useState<'tours' | 'chat' | 'jargon' | 'guidance'>('tours');
   const [activeTour, setActiveTour] = useState<GuidedTour | null>(null);
   const [activeStepIndex, setActiveStepIndex] = useState(0);
 
@@ -285,7 +286,19 @@ export const SpectraAssistantDrawer: React.FC = () => {
                   : 'text-neutral-400 hover:text-neutral-200'
               )}
             >
-              📖 Jargon Buster
+              📖 Jargon
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('guidance')}
+              className={cn(
+                'flex-1 rounded-lg py-1.5 text-center text-[11px] font-medium transition-colors',
+                activeTab === 'guidance'
+                  ? 'bg-sky-500/20 text-sky-300 font-semibold'
+                  : 'text-neutral-400 hover:text-neutral-200'
+              )}
+            >
+              🧠 AI Guide
             </button>
           </nav>
 
@@ -494,6 +507,12 @@ export const SpectraAssistantDrawer: React.FC = () => {
                     </p>
                   )}
                 </div>
+              </div>
+            )}
+            {/* 4. Model Decision Guidance & Active Learning View (Phase D) */}
+            {activeTab === 'guidance' && (
+              <div className="space-y-3">
+                <AssistantModelGuidance />
               </div>
             )}
           </div>
