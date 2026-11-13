@@ -215,3 +215,34 @@ async def get_next_classification_task(
             "task": task,
         }
     return {"success": False, "detail": "No classification tasks remaining in queue"}
+
+
+try:
+    from backend.science.automated_inspector import inspect_candidate, load_curated_archetypes
+except ImportError:
+    from science.automated_inspector import inspect_candidate, load_curated_archetypes  # type: ignore
+
+
+class CandidateInspectRequest(BaseModel):
+    ra: float = Field(..., ge=0.0, le=360.0)
+    dec: float = Field(..., ge=-90.0, le=90.0)
+    fov_arcmin: float = Field(default=3.0, ge=0.5, le=60.0)
+
+
+@router.post("/candidate/inspect")
+async def inspect_candidate_endpoint(req: CandidateInspectRequest) -> dict[str, Any]:
+    """POST /api/candidate/inspect - Automated multi-tool candidate screening engine.
+    
+    Specification Anchor: Implementation Plan Phase C (Issue C.2) & Contract §3.2
+    """
+    return inspect_candidate(ra=req.ra, dec=req.dec, fov_arcmin=req.fov_arcmin)
+
+
+@router.get("/candidate/archetypes")
+async def get_curated_archetypes_endpoint() -> list[dict[str, Any]]:
+    """GET /api/candidate/archetypes - Gold-standard curated archetypes catalog.
+    
+    Specification Anchor: Implementation Plan Phase C (Issue C.1)
+    """
+    return load_curated_archetypes()
+

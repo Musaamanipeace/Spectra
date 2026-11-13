@@ -1,9 +1,35 @@
 import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { cn } from '../lib/utils';
 import { useTelemetryStore } from '../store/useTelemetryStore';
 import { useSpectraUrlState } from '../hooks/useSpectraUrlState';
 import { WebGLComparatorCanvas, HoverPixelInfo } from '../components/WebGLComparatorCanvas';
 import { MANDATORY_BENCHMARKS } from '../components/GlobalCommandHeader';
 import { browserCacheManager, computeTensorCacheKey } from '../lib/cache/browserCacheManager';
+
+export interface CandidateInspectReport {
+  target: { ra: number; dec: number };
+  motion: {
+    is_moving: boolean;
+    mu_arcsec_yr: number;
+    trajectory_angle_deg: number;
+    centroid_drift_pixels: Array<{ epoch: number; mjd: number; x: number; y: number }>;
+  };
+  variability: {
+    is_variable: boolean;
+    max_delta_flux_percent: number;
+    dipole_snr: number;
+  };
+  spectroscopy: {
+    best_match_class: string;
+    cosine_similarity: number;
+    key_absorption_features: string[];
+  };
+  overall_verdict: {
+    category: 'High-PM Brown Dwarf' | 'Variable Star' | 'Ice Core' | 'Artifact' | 'Unresolved';
+    confidence: number;
+    explanation_summary: string;
+  };
+}
 
 /**
  * Spectra Tab 2: Time-Domain Comparator (<TimeDomainComparator />)
@@ -140,6 +166,34 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
   const [dataStatus, setDataStatus] = useState<'loading' | 'error' | 'ready'>('loading');
   const [dataMessage, setDataMessage] = useState('Contacting the SPHEREx archive…');
   const [loadAttempt, setLoadAttempt] = useState(0);
+
+  // Automated Candidate Screening Pipeline (Phase C, Issue C.2)
+  const [inspectReport, setInspectReport] = useState<CandidateInspectReport | null>(null);
+  const [isInspecting, setIsInspecting] = useState<boolean>(false);
+  const [inspectError, setInspectError] = useState<string | null>(null);
+
+  const handleRunInspection = async () => {
+    setIsInspecting(true);
+    setInspectError(null);
+    try {
+      const res = await fetch('/api/candidate/inspect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ra: urlRa,
+          dec: urlDec,
+          fov_arcmin: (urlFov || 180) / 60,
+        }),
+      });
+      if (!res.ok) throw new Error(`Inspection failed (${res.status})`);
+      const data: CandidateInspectReport = await res.json();
+      setInspectReport(data);
+    } catch (err) {
+      setInspectError(err instanceof Error ? err.message : 'Inspection screening failed');
+    } finally {
+      setIsInspecting(false);
+    }
+  };
 
   const handleSubmitClassification = async () => {
     setIsSubmittingClassification(true);
@@ -1202,9 +1256,90 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
           </div>
         </details>
 
-        <details className="rounded-xl border border-neutral-800 bg-neutral-900/40 shadow-sm backdrop-blur">
+        <details className="rounded-xl border border-neutral-800 bg-neutral-900/40 shadow-sm backdrop-blur" open>
           <summary className="flex cursor-pointer list-none items-center justify-between gap-2 p-4 text-xs font-semibold uppercase tracking-wide text-white">Analysis tools · Light curve, motion, and triage <span aria-hidden="true" className="text-primary">⌄</span></summary>
           <div className="space-y-4 px-3 pb-3 lg:px-4 lg:pb-4">
+        {/* Automated Multi-Tool Candidate Investigator (Phase C, Issue C.2) */}
+        <section className="rounded-xl border border-sky-500/30 bg-neutral-900/60 p-4 shadow-sm backdrop-blur">
+          <div className="mb-2 flex items-center justify-between">
+            <div className="flex items-center gap-1.5">
+              <span className="text-sky-400">⚡</span>
+              <h3 className="font-semibold text-white text-xs tracking-wide uppercase">Candidate Investigator</h3>
+            </div>
+            <button
+              type="button"
+              disabled={isInspecting}
+              onClick={handleRunInspection}
+              className="rounded-lg bg-sky-500/20 border border-sky-500/40 px-2.5 py-1 text-xs font-semibold text-sky-300 hover:bg-sky-500 hover:text-black transition-colors disabled:opacity-50"
+            >
+              {isInspecting ? 'Screening Candidate…' : 'Screen Target →'}
+            </button>
+          </div>
+          <p className="mb-3 text-[11px] text-neutral-400">
+            Automated screening combining temporal differencing, 2D centroid proper motion, 102-channel SED matching, and molecular ice fitting.
+          </p>
+
+          {inspectError && (
+            <div className="rounded-lg border border-red-500/30 bg-red-950/20 p-2 text-[11px] text-red-300">
+              {inspectError}
+            </div>
+          )}
+
+          {inspectReport && (
+            <div className="space-y-2.5 rounded-lg border border-neutral-800 bg-black/60 p-3">
+              <div className="flex items-center justify-between">
+                <span className={cn(
+                  'rounded-full px-2 py-0.5 text-[10px] font-bold font-mono uppercase tracking-wider',
+                  inspectReport.overall_verdict.category === 'High-PM Brown Dwarf' && 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
+                  inspectReport.overall_verdict.category === 'Variable Star' && 'bg-amber-500/20 text-amber-300 border border-amber-500/30',
+                  inspectReport.overall_verdict.category === 'Ice Core' && 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30',
+                  inspectReport.overall_verdict.category === 'Artifact' && 'bg-rose-500/20 text-rose-300 border border-rose-500/30',
+                  inspectReport.overall_verdict.category === 'Unresolved' && 'bg-neutral-800 text-neutral-300'
+                )}>
+                  {inspectReport.overall_verdict.category}
+                </span>
+                <span className="font-mono text-[11px] text-sky-300">
+                  Confidence: {Math.round(inspectReport.overall_verdict.confidence * 100)}%
+                </span>
+              </div>
+
+              <p className="text-xs leading-relaxed text-neutral-200">
+                {inspectReport.overall_verdict.explanation_summary}
+              </p>
+
+              <div className="grid grid-cols-2 gap-2 border-t border-neutral-800/80 pt-2 text-[11px] font-mono">
+                <div>
+                  <span className="text-neutral-500">Proper Motion: </span>
+                  <span className="text-white font-medium">{inspectReport.motion.mu_arcsec_yr}&quot;/yr ({inspectReport.motion.trajectory_angle_deg}°)</span>
+                </div>
+                <div>
+                  <span className="text-neutral-500">Dipole SNR: </span>
+                  <span className="text-white font-medium">{inspectReport.variability.dipole_snr}σ</span>
+                </div>
+                <div>
+                  <span className="text-neutral-500">SED Class: </span>
+                  <span className="text-white font-medium">{inspectReport.spectroscopy.best_match_class}</span>
+                </div>
+                <div>
+                  <span className="text-neutral-500">Similarity: </span>
+                  <span className="text-white font-medium">{Math.round(inspectReport.spectroscopy.cosine_similarity * 100)}%</span>
+                </div>
+              </div>
+
+              {inspectReport.motion.centroid_drift_pixels.length > 0 && (
+                <div className="border-t border-neutral-800/80 pt-2">
+                  <span className="text-[10px] uppercase font-semibold text-neutral-400">Centroid Track (px): </span>
+                  <span className="font-mono text-[10px] text-sky-300">
+                    {inspectReport.motion.centroid_drift_pixels
+                      .map((p) => `E${p.epoch}: (${p.x}, ${p.y})`)
+                      .join(' → ')}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+
         {/* Forced 3x3 Aperture Photometry Light Curve */}
         <section className="rounded-xl border border-neutral-800 bg-neutral-900/40 p-4 shadow-sm backdrop-blur">
           <div className="mb-2 flex items-center justify-between">

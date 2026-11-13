@@ -97,6 +97,22 @@ export const UNIFIED_CATALOG_TARGETS: CatalogTarget[] = [
     preset: 'water_ice',
     launchTab: 'comparator',
   },
+  {
+    id: 'taurus_ice_core',
+    name: 'Taurus Molecular Cloud Core',
+    designation: 'TMC-1 Prestellar Core',
+    classification: 'Deep Interstellar Ice Sanctuary',
+    humanCategory: 'variables',
+    categoryLabel: 'Molecular Ice Core',
+    ra: 68.98,
+    dec: 25.75,
+    motionRate: 'Stationary (<0.01" per year)',
+    infraredProfile: 'Deep 3.05 µm H2O & 4.27 µm CO2 Ice Troughs',
+    status: 'Verified NASA Standard',
+    narrative: 'A dark, frozen stellar nursery where pristine water, carbon dioxide, and carbon monoxide ices freeze onto interstellar grains.',
+    preset: 'water_ice',
+    launchTab: 'ice',
+  },
 ];
 
 interface CandidateCatalogDrawerProps {
