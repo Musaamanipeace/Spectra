@@ -28,7 +28,33 @@ export const MissionLaunchpad: React.FC<MissionLaunchpadProps> = ({
             <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.18em] text-primary">Choose a starting point</p>
             <h2 id="starter-paths-title" className="text-xl font-semibold text-white">Explore at your own pace</h2>
           </div>
-          <div className="grid gap-3 md:grid-cols-3">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <button
+              type="button"
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.set('tab', 'navigator');
+                url.searchParams.set('fov', '180');
+                url.searchParams.set('mode', 'stitched_hips');
+                url.searchParams.set('preset', 'all_sky');
+                url.searchParams.set('ra', '266.41682');
+                url.searchParams.set('dec', '-29.00782');
+                window.history.pushState({}, '', url.toString());
+                window.dispatchEvent(new PopStateEvent('popstate'));
+                onLaunchWorkstation('navigator');
+              }}
+              className="group rounded-xl border border-sky-500/40 bg-sky-950/20 p-5 text-left transition-colors hover:border-sky-400 hover:bg-sky-900/30"
+            >
+              <span className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-sky-300 group-hover:text-white">
+                <svg className="h-4 w-4 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
+                  <path d="M12 6a6 6 0 1 0 6 6" />
+                  <line x1="12" y1="12" x2="19" y2="5" />
+                </svg>
+                Live Sky View <span aria-hidden="true">→</span>
+              </span>
+              <span className="block text-xs leading-relaxed text-sky-200/80">Stitched all-sky survey mosaic with active MOC footprint coverage.</span>
+            </button>
             <button type="button" onClick={() => onLaunchWorkstation('navigator')} className="group rounded-xl border border-neutral-800 bg-black p-5 text-left transition-colors hover:border-primary/60 hover:bg-neutral-900">
               <span className="mb-2 block text-sm font-semibold text-white group-hover:text-primary">Explore the sky <span aria-hidden="true">→</span></span>
               <span className="block text-xs leading-relaxed text-neutral-400">Open the sky navigator and search for a target or position.</span>

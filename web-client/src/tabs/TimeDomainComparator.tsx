@@ -3,6 +3,7 @@ import { useTelemetryStore } from '../store/useTelemetryStore';
 import { useSpectraUrlState } from '../hooks/useSpectraUrlState';
 import { WebGLComparatorCanvas, HoverPixelInfo } from '../components/WebGLComparatorCanvas';
 import { MANDATORY_BENCHMARKS } from '../components/GlobalCommandHeader';
+import { browserCacheManager, computeTensorCacheKey } from '../lib/cache/browserCacheManager';
 
 /**
  * Spectra Tab 2: Time-Domain Comparator (<TimeDomainComparator />)
@@ -473,17 +474,34 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
 
     const loadCutoutTensor = async () => {
       setDataStatus('loading');
-      setDataMessage('Querying IRSA for real SPHEREx exposures…');
+      setDataMessage('Checking browser tensor cache…');
       setLoadedTensor(null);
       setEpochIndex(0);
       try {
+        const fovVal = Math.round(urlFov || 180);
+        const cacheKey = await computeTensorCacheKey(urlRa, urlDec, fovVal, 'spherex_qr2');
+        const cached = await browserCacheManager.get(cacheKey);
+
+        if (cached && cached.buffer) {
+          const parsed = parseBinaryTensorBuffer(cached.buffer);
+          if (parsed && !parsed.isSimulated) {
+            if (!cancelled) {
+              setLoadedTensor(parsed);
+              setDataStatus('ready');
+              useTelemetryStore.setState({ sourceBadge: cached.sourceBadge || parsed.sourceBadge });
+            }
+            return;
+          }
+        }
+
+        setDataMessage('Querying IRSA for real SPHEREx exposures…');
         const postRes = await fetch('/api/cutout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             ra: urlRa,
             dec: urlDec,
-            fov_arcsec: Math.round(urlFov || 180),
+            fov_arcsec: fovVal,
             adaptive_window: true,
           }),
         });
@@ -503,12 +521,35 @@ export const TimeDomainComparator: React.FC<TimeDomainComparatorProps> = ({ onOp
             setDataMessage(progress.message || 'Waiting for IRSA cutouts…');
             continue;
           }
-          const tensorRes = await fetch(`/api/cutout/${task_id}/tensor`);
+          const tensorHeaders: Record<string, string> = {};
+          if (cached?.eTag) {
+            tensorHeaders['If-None-Match'] = cached.eTag;
+          }
+          const tensorRes = await fetch(`/api/cutout/${task_id}/tensor`, { headers: tensorHeaders });
+          if (tensorRes.status === 304 && cached?.buffer) {
+            const parsed = parseBinaryTensorBuffer(cached.buffer);
+            if (parsed && !cancelled) {
+              setLoadedTensor(parsed);
+              setDataStatus('ready');
+              useTelemetryStore.setState({ sourceBadge: cached.sourceBadge || parsed.sourceBadge });
+              return;
+            }
+          }
           if (!tensorRes.ok) throw new Error(`IRSA tensor request failed (${tensorRes.status})`);
-          const parsed = parseBinaryTensorBuffer(await tensorRes.arrayBuffer());
+          const rawBuffer = await tensorRes.arrayBuffer();
+          const parsed = parseBinaryTensorBuffer(rawBuffer);
           if (!parsed || parsed.isSimulated) {
             throw new Error('The archive returned no verified real-data tensor. No synthetic preview is shown.');
           }
+          const eTag = tensorRes.headers.get('ETag') || undefined;
+          await browserCacheManager.set({
+            cacheKey,
+            timestamp: Date.now(),
+            eTag,
+            shape: [parsed.epochs, 6, parsed.height, parsed.width],
+            buffer: rawBuffer,
+            sourceBadge: parsed.sourceBadge,
+          });
           if (!cancelled) {
             setLoadedTensor(parsed);
             setDataStatus('ready');

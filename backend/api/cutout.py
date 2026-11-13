@@ -9,6 +9,7 @@ GET /api/cutout/{task_id}/tensor (14 B/px little-endian binary stream + zstd-shu
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -288,7 +289,7 @@ async def get_cutout_progress(task_id: str, request: Request, stream: bool = Fal
 
 
 @router.get("/cutout/{task_id}/tensor")
-async def get_cutout_tensor(task_id: str) -> Response:
+async def get_cutout_tensor(task_id: str, request: Request = None) -> Response:
     """GET /api/cutout/{task_id}/tensor - 14 B/px binary tensor (+zstd-shuffle)."""
     if task_id not in task_states:
         raise HTTPException(status_code=404, detail=f"Task {task_id} not found")
@@ -306,10 +307,26 @@ async def get_cutout_tensor(task_id: str) -> Response:
 
     tensor_bytes, metadata = cached
     compression = (metadata or {}).get("compression", "none")
+
+    # Compute deterministic ETag and Cache-Control headers
+    etag = f'"{hashlib.sha256(tensor_bytes).hexdigest()[:16]}"'
+    cache_control = "public, max-age=3600, must-revalidate"
+
+    if request is not None and request.headers.get("if-none-match") == etag:
+        return Response(
+            status_code=304,
+            headers={"ETag": etag, "Cache-Control": cache_control, "X-Cache": "hit"},
+        )
+
     return Response(
         content=tensor_bytes,
         media_type="application/octet-stream",
-        headers={"X-Cache": "hit", "X-Compression": compression, "Cache-Control": "no-cache"},
+        headers={
+            "X-Cache": "hit",
+            "X-Compression": compression,
+            "ETag": etag,
+            "Cache-Control": cache_control,
+        },
     )
 
 

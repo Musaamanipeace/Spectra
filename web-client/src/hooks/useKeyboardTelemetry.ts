@@ -39,6 +39,23 @@ export function useKeyboardTelemetry(options: KeyboardTelemetryOptions = {}) {
         return;
       }
 
+      // Alt+S: Jump to Live Stitched Sky View (Phase A, Issue A.1)
+      if (event.altKey && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        const url = new URL(window.location.href);
+        url.searchParams.set('tab', 'navigator');
+        url.searchParams.set('fov', '180');
+        url.searchParams.set('mode', 'stitched_hips');
+        url.searchParams.set('preset', 'all_sky');
+        url.searchParams.set('ra', '266.41682');
+        url.searchParams.set('dec', '-29.00782');
+        window.history.pushState({}, '', url.toString());
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        const store = useTelemetryStore.getState();
+        store.setCoordinates(266.41682, -29.00782, 'Galactic Center (All-Sky HiPS)', '[SPHEREx Stitched HiPS]');
+        return;
+      }
+
       // Do not capture other navigation shortcuts when the user is typing into text fields
       if (isInput) return;
 

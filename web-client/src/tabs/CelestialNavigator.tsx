@@ -364,7 +364,7 @@ export const CelestialNavigator: React.FC = () => {
     setRgbPreset,
   } = useTelemetryStore();
 
-  const { setTab, setRa, setDec, setFov: setUrlFov, setPreset } = useSpectraUrlState();
+  const { mode, setTab, setRa, setDec, setFov: setUrlFov, setPreset } = useSpectraUrlState();
 
   // Layer & Filter Controls
   const [showLvfFootprints, setShowLvfFootprints] = useState<boolean>(false);
@@ -1087,6 +1087,23 @@ export const CelestialNavigator: React.FC = () => {
       console.warn('Error gotoRaDec:', e);
     }
   }, [ra, dec]);
+
+  // Handle Live Sky View stitched_hips mode (Phase A, Issue A.1)
+  useEffect(() => {
+    const aladin = aladinInstanceRef.current;
+    if (!aladinReady || !aladin) return;
+    if (mode === 'stitched_hips') {
+      try {
+        aladin.gotoRaDec(ra || 266.41682, dec || -29.00782);
+        aladin.setFoV?.(60.0);
+        setActiveSurvey('allwise-color');
+        setShowLvfFootprints(true);
+        setShowCutoutBox(true);
+      } catch (e) {
+        console.warn('Error configuring stitched_hips view:', e);
+      }
+    }
+  }, [mode, aladinReady, ra, dec]);
 
   // Toggle native WCS Coordinate Grid
   useEffect(() => {

@@ -409,7 +409,7 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
     setRgbPreset,
   } = useTelemetryStore();
 
-  const { tab, setTab, setRa, setDec, setPreset } = useSpectraUrlState();
+  const { tab, setTab, setRa, setDec, setPreset, mode, setMode, setFov } = useSpectraUrlState();
 
   const [searchInput, setSearchInput] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -701,6 +701,36 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
         >
           {sourceBadge}
         </Badge>
+
+        {/* Live Sky View Shortcut (Phase A) */}
+        <button
+          type="button"
+          onClick={() => {
+            setTab('navigator');
+            setFov(180);
+            setMode('stitched_hips');
+            setPreset('all_sky');
+            setRa(266.41682);
+            setDec(-29.00782);
+            setCoordinates(266.41682, -29.00782, 'Galactic Center (All-Sky HiPS)', '[SPHEREx Stitched HiPS]');
+          }}
+          className={cn(
+            'flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-all shadow-sm',
+            mode === 'stitched_hips' && tab === 'navigator'
+              ? 'border-sky-400/60 bg-sky-500/20 text-sky-200 ring-1 ring-sky-400/40'
+              : 'border-neutral-800 bg-neutral-900/80 text-neutral-300 hover:border-sky-500/50 hover:bg-neutral-800 hover:text-white'
+          )}
+          title="Jump to Live Stitched Sky View (Alt+S)"
+        >
+          <svg className="h-3.5 w-3.5 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
+            <path d="M12 6a6 6 0 1 0 6 6" />
+            <path d="M12 10a2 2 0 1 0 2 2" />
+            <line x1="12" y1="12" x2="19" y2="5" />
+          </svg>
+          <span className="font-semibold text-sky-300">Live Sky</span>
+          <kbd className="hidden sm:inline rounded bg-neutral-800 px-1 py-0.2 text-[9px] font-mono text-neutral-400 border border-neutral-700">Alt+S</kbd>
+        </button>
 
         {onOpenCatalog && (
           <button
@@ -1025,7 +1055,30 @@ export const GlobalCommandHeader: React.FC<GlobalCommandHeaderProps> = ({
               <button type="button" onClick={() => selectWorkspace('discussions')} className="flex w-full items-center rounded-lg px-2.5 py-2 text-left text-xs text-foreground hover:bg-secondary">
                 Review · Observation Discussions
               </button>
-              {onOpenCatalog && (
+              {/* Live Sky View Shortcut (Phase A) */}
+              <button
+                type="button"
+                onClick={() => {
+                  selectWorkspace('navigator');
+                  setFov(180);
+                  setMode('stitched_hips');
+                  setPreset('all_sky');
+                  setRa(266.41682);
+                  setDec(-29.00782);
+                  setCoordinates(266.41682, -29.00782, 'Galactic Center (All-Sky HiPS)', '[SPHEREx Stitched HiPS]');
+                }}
+                className="mt-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs font-medium text-sky-400 hover:bg-secondary"
+              >
+                <svg className="h-3.5 w-3.5 text-sky-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8z" />
+                  <path d="M12 6a6 6 0 1 0 6 6" />
+                  <path d="M12 10a2 2 0 1 0 2 2" />
+                  <line x1="12" y1="12" x2="19" y2="5" />
+                </svg>
+                <span>Live Stitched Sky View</span>
+              </button>
+
+        {onOpenCatalog && (
                 <button
                   type="button"
                   onClick={() => {

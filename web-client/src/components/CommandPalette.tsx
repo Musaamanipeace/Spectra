@@ -35,7 +35,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
     resetView,
   } = useTelemetryStore();
 
-  const { setTab, setRa, setDec, setPreset } = useSpectraUrlState();
+  const { setTab, setRa, setDec, setPreset, setFov, setMode } = useSpectraUrlState();
 
   // Focus input when opened
   useEffect(() => {
@@ -74,7 +74,23 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({ isOpen, onClose 
       };
     }),
 
-    // 2. Workspace Tabs
+    // 2. Workspace Tabs & Quick Actions
+    {
+      id: 'action-live-sky-view',
+      category: 'Workspaces',
+      label: 'Jump to Live Stitched Sky (All-Sky HiPS Mosaic & MOC Footprints)',
+      shortcut: 'Alt+S',
+      perform: () => {
+        setTab('navigator');
+        setFov(180);
+        setMode('stitched_hips');
+        setPreset('all_sky');
+        setRa(266.41682);
+        setDec(-29.00782);
+        setCoordinates(266.41682, -29.00782, 'Galactic Center (All-Sky HiPS)', '[SPHEREx Stitched HiPS]');
+        onClose();
+      },
+    },
     {
       id: 'tab-navigator',
       category: 'Workspaces',

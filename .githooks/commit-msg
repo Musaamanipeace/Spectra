@@ -22,7 +22,7 @@ fi
 # 2. Enforce Conventional Header Grammar:
 #    <type>(<role>-<scope>): <imperative summary> (#<issue>)
 #    (docs/release/chore(governance) commits may omit (#<N>) only when not tied to an issue)
-HEADER_REGEX='^(feat|fix|perf|test|refactor|docs|chore|ci|release)\((e[1-6]|team)-[a-z0-9-]+\): [a-zA-Z0-9].{8,90}( \(#[0-9]+\))?$'
+HEADER_REGEX='^(feat|fix|perf|test|refactor|docs|chore|ci|release)\((e[1-6]|team|expamani)-[a-z0-9-]+\): [a-zA-Z0-9].{8,90}( \(#[0-9]+\))?$'
 
 if ! [[ "$SUBJECT_LINE" =~ $HEADER_REGEX ]]; then
   echo "❌ [COMMIT REJECTED — AGENTS.md §8] Invalid commit subject format:" >&2
