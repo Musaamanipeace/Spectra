@@ -14,6 +14,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { MissionLaunchpad } from './components/MissionLaunchpad';
 import { MajorDiscovery } from './components/MajorDiscoveriesData';
 import { CandidateCatalogDrawer, CatalogTarget } from './components/CandidateCatalogDrawer';
+import { SpectraAssistantDrawer } from './components/chat/SpectraAssistantDrawer';
 import { CelestialNavigator } from './tabs/CelestialNavigator';
 import { TimeDomainComparator } from './tabs/TimeDomainComparator';
 import { SpectrophotometricLab } from './tabs/SpectrophotometricLab';
@@ -513,6 +514,9 @@ export const PublicExplorerPortal: React.FC = () => {
         activeRa={urlRa}
         activeDec={urlDec}
       />
+
+      {/* Interactive Onboarding AI Assistant ("AstroGuide" - Phase B) */}
+      <SpectraAssistantDrawer />
 
       {/* Main Content: Option A Mission Launchpad or Active Workstation */}
       <main className={`relative flex-1 overflow-hidden ${!isEmbed ? 'pt-[56px]' : ''}`}>
